@@ -1,0 +1,11 @@
+yandex_music:
+  token: "your_yandex_token"
+
+youtube_music:
+  client_id: "your_youtube_client_id"
+  client_secret: "your_youtube_client_secret"
+  
+tor_proxy:
+  enabled: true  # Set to false to disable Tor
+  host: "127.0.0.1"
+  port: 9150
