@@ -4,7 +4,7 @@ from .track import Track
 from tqdm import tqdm
 
 
-class YandexMusicExporter:
+class YaMusicHandle:
     def __init__(self, token: str):
         self.client = Client(token).init()
 

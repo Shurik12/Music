@@ -2,8 +2,8 @@ import argparse
 import json
 import yaml
 
-from core import YandexMusicExporter
-from core import YoutubeImporter
+from src import YaMusicHandle
+from src.ytmusic import YTMusicClient
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -19,7 +19,6 @@ def load_config(config_path: str = "config.yaml") -> dict:
     except yaml.YAMLError as e:
         print(f"Error parsing config.yaml: {e}")
         exit(1)
-
 
 def create_template_config(config_path: str):
     """Create a template config file"""
@@ -62,8 +61,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def move_tracks(
-        importer: YandexMusicExporter, 
-        exporter: YoutubeImporter, 
+        importer: YaMusicHandle, 
+        exporter: YTMusicClient, 
         out_path: str
     ) -> None:
     data = {
@@ -119,13 +118,7 @@ def main() -> None:
         print("Please update your Yandex Music token in config.yaml")
         exit(1)
     
-    importer = YandexMusicExporter(yandex_token)
-    
-    # Initialize YouTube Music importer with config
-    youtube_config = {
-        'client_id': config['youtube_music']['client_id'],
-        'client_secret': config['youtube_music']['client_secret'],
-    }
+    importer = YaMusicHandle(yandex_token)
     
     # Tor proxy configuration
     tor_config = config.get('tor_proxy', {})
@@ -137,16 +130,23 @@ def main() -> None:
         print(f"Using Tor proxy: {proxy_host}:{proxy_port}")
     else:
         print("Tor proxy disabled")
-    
-    exporter = YoutubeImporter(
-        client_id=youtube_config['client_id'],
-        client_secret=youtube_config['client_secret'],
-        use_tor=use_tor,
-        tor_host=proxy_host,
-        tor_port=proxy_port
+
+    ytmusic = YTMusicClient(
+        client_id = config['youtube_music']['client_id'],
+        client_secret = config['youtube_music']['client_secret'],
+        use_tor = use_tor,
+        tor_host = proxy_host,
+        tor_port = proxy_port
     )
-    
-    move_tracks(importer, exporter, args.output)
+
+    # plylists = ytmusic.get_playlists()
+    # ytmusic.print_playlists(plylists)
+
+    tracks = ytmusic.get_track_out_playlist()
+    ytmusic.print_tracks(tracks)
+
+    # ytmusic.create_playlist(playlist)
+    # move_tracks(importer, exporter, args.output)
 
 
 if __name__ == '__main__':
