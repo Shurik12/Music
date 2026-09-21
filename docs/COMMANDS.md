@@ -81,4 +81,4 @@ Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
 | `make run` | `python3 main.py` |
 | `make venv` | Creates `venv/` |
 | `make requirements` | `pip install -r requirements.txt` |
-| `make clean` | Removes `__pycache__` directories |
+| `make clean` | Removes `__pycache__` directories (skips `venv/`) |
