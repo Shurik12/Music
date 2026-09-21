@@ -1,5 +1,6 @@
 venv/
 config.yaml
+browser.json
 __pycache__/
 logs/
 downloads/

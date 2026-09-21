@@ -52,6 +52,34 @@ class YTMusicClient:
             auth="browser.json",
             requests_session=session,
         )
+        self._check_auth()
+
+    def _check_auth(self) -> None:
+        """Probe the account endpoint; expired browser.json silently returns logged-out data."""
+        try:
+            info = self.ytmusic.get_account_info()
+        except KeyError:
+            print(
+                "WARNING: YouTube Music authentication is expired or invalid (browser.json).\n"
+                "         Library/playlist/liked-track methods will return empty results.\n"
+                "         Re-export it: log into https://music.youtube.com in a browser, copy a\n"
+                "         'browse' request's headers from DevTools, then run: ytmusicapi browser"
+            )
+            file_logger.warning(
+                "YouTube Music auth check failed: browser.json expired or invalid (logged-out response)"
+            )
+            return
+        except Exception as e:
+            print(
+                f"WARNING: Could not verify YouTube Music authentication ({type(e).__name__}: {e}).\n"
+                "         Check network/proxy (SOCKS5 127.0.0.1:1080) and browser.json."
+            )
+            file_logger.warning(f"YouTube Music auth check failed: {type(e).__name__}: {e}")
+            return
+
+        account = info.get("accountName", "unknown")
+        print(f"YouTube Music authenticated as: {account}")
+        file_logger.info(f"YouTube Music auth check passed: authenticated as {account}")
 
     def import_liked_tracks(
         self, tracks: List[Track]
