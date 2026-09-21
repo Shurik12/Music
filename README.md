@@ -15,6 +15,7 @@ It can:
 
 - Linux, Python **3.12+** (the code uses PEP 701 f-strings with nested quotes)
 - `ffmpeg` (required by yt-dlp for MP3 conversion): `sudo apt install ffmpeg`
+- Node.js **≥20** (or deno) — yt-dlp needs a JS runtime for YouTube extraction; the EJS solver script is fetched from GitHub on first use and then cached
 - A local SOCKS5 proxy on `127.0.0.1:1080` (e.g. ciadpi; Tor would be `9150`). The YouTube Music API client and yt-dlp are hardcoded to use it — see the [known issues](docs/ARCHITECTURE.md).
 - Accounts / credentials:
   - Yandex Music OAuth token
@@ -159,14 +160,15 @@ tracks.txt              Output of "Print tracks to file"
 - **YouTube Music returns empty results (no error)** — `browser.json` has expired: account endpoints silently return the logged-out view. The app warns about this at startup. Re-export it (see [Re-exporting browser.json](#re-exporting-browserjson)).
 - **`Your cookie is missing the required value __Secure-3PAPISID`** — the exported headers didn't include the `cookie` header. Re-copy using **Copy as fetch (Node.js)** or *Copy request headers* — plain *Copy as fetch* strips cookies — and make sure the paste contains a line starting with `cookie:` (details in [Re-exporting browser.json](#re-exporting-browserjson)).
 - **All YouTube requests fail / time out** — the tool expects a SOCKS5 proxy on `127.0.0.1:1080`. Start ciadpi (or edit the proxy in `src/ytmusic.py`).
+- **Downloads fail with HTTP 403 errors** — usually an outdated yt-dlp (the 2026.3.17 build failed every download; 2026.08.19 works). Update it: `pip install -U yt-dlp`. Recent yt-dlp versions need node ≥20 (or deno) and fetch the EJS solver from GitHub on first run. The exact yt-dlp error is logged to `logs/download_log_<timestamp>.log` (see *Known issues* in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - **`config.yaml` not found** — you must create it from `ex_config.yaml`; it is intentionally gitignored.
 - **MP3 conversion fails** — install `ffmpeg`.
 
 ## Security notes
 
 - `config.yaml` (real token) and `venv/` are gitignored — keep it that way.
-- `browser.json` contains live YouTube auth cookies and is currently **tracked by git**. If this repo is ever pushed anywhere, rotate the cookies (re-run `ytmusicapi browser`) and consider untracking it: `git rm --cached browser.json` + add it to `.gitignore`.
-- `downloads/`, `logs/` and `__pycache__/` are generated and not gitignored; add them to `.gitignore` if you want a clean `git status`.
+- `browser.json` contains live YouTube auth cookies. It is now gitignored and untracked, but it was committed previously — if this repo was ever pushed anywhere, rotate the cookies (re-run `ytmusicapi browser`) and avoid re-adding the file.
+- `downloads/`, `logs/` and `__pycache__/` are generated and gitignored.
 
 ## More documentation
 
