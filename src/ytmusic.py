@@ -34,6 +34,35 @@ file_logger.setLevel(logging.INFO)
 file_logger.addHandler(file_handler)
 file_logger.propagate = False  # Don't send to console
 
+
+class YtdlpLogger:
+    """Route yt-dlp messages into the file log and collect errors for callers.
+
+    When passed as yt-dlp's ``logger`` param, yt-dlp sends errors via ``error``,
+    warnings via ``warning`` and regular screen output via ``debug``. Without it,
+    failures are silently swallowed by quiet + ignoreerrors (the caller only sees
+    a missing file with no reason).
+    """
+
+    def __init__(self, echo: bool = False) -> None:
+        self.echo = echo
+        self.errors: List[str] = []
+
+    def debug(self, msg: str) -> None:
+        if self.echo:
+            print(msg)
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        file_logger.warning(f"yt-dlp: {msg}")
+
+    def error(self, msg: str) -> None:
+        self.errors.append(msg)
+        file_logger.error(f"yt-dlp: {msg}")
+
+
 from src.track import Track
 
 
@@ -462,6 +491,8 @@ class YTMusicClient:
         # Create output directory if it doesn't exist
         Path(output_path).mkdir(parents=True, exist_ok=True)
         
+        ydl_logger = YtdlpLogger(echo=not quiet)
+        
         # Configure yt-dlp options
         ydl_opts = {
             # Proxy configuration
@@ -486,6 +517,11 @@ class YTMusicClient:
             'no_color': quiet,
             'ignoreerrors': True,
             'extract_flat': False,
+            'logger': ydl_logger,
+            # YouTube needs a JS runtime (node >= 20 or deno) plus the EJS solver
+            # script, which is fetched from GitHub on first use and then cached.
+            'js_runtimes': {'node': {}, 'deno': {}},
+            'remote_components': ['ejs:github'],
         }
         
         # Override audio quality
@@ -507,19 +543,28 @@ class YTMusicClient:
                 with suppress_output():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=True)
-                        filename = ydl.prepare_filename(info)
-                        filename = os.path.splitext(filename)[0] + f'.{format_type}'
-                        return filename
+                        filename = ydl.prepare_filename(info) if info else None
             else:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info)
-                    filename = os.path.splitext(filename)[0] + f'.{format_type}'
-                    file_logger.info(f"Downloaded: {filename}")
-                    return filename
+                    filename = ydl.prepare_filename(info) if info else None
         except Exception as e:
             file_logger.error(f"Error downloading video {video_id}: {e}")
             return None
+
+        if filename is None:
+            reason = "; ".join(ydl_logger.errors) or "unknown yt-dlp error (no details reported)"
+            file_logger.error(f"  yt-dlp failed for {video_id}: {reason}")
+            return None
+
+        filename = os.path.splitext(filename)[0] + f'.{format_type}'
+        if not os.path.exists(filename):
+            reason = "; ".join(ydl_logger.errors) or "file was not created"
+            file_logger.error(f"  yt-dlp did not create {video_id} file ({filename}): {reason}")
+            return None
+
+        file_logger.info(f"Downloaded: {filename}")
+        return filename
         
     def download_all_playlists(
         self,

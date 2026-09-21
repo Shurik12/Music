@@ -39,14 +39,14 @@ Handler: `CLI.handle_ytmusic_command` (src/cli.py:127).
 
 | # | Aliases | Action | Implementation | Side effects / notes |
 |---|---------|--------|----------------|----------------------|
-| 1 | `list` | List playlists | `list_playlists` (src/cli.py:56) → `YTMusicClient.get_playlists/print_playlists` (src/ytmusic.py:136,153) | Prints `title: playlistId` (up to 100 playlists) |
-| 2 | `artists` | Get playlist artists | src/cli.py:64 → `get_playlist/get_playlist_artists` (src/ytmusic.py:191,199) | **Hardcoded to `playlists[1]`** — effectively a debug command |
-| 3 | `tracks` | Count liked tracks not in any playlist | src/cli.py:133 → `get_track_out_playlist` (src/ytmusic.py:298) | Read-only; walks every library playlist (slow on big libraries) |
-| 4 | `print` | Write those tracks out | src/cli.py:136 → `print_tracks` (src/ytmusic.py:338) | Writes `tracks.txt` (artist/title/videoId, TSV) in CWD |
-| 5 | `playlist_map` | Update playlist map | src/cli.py:140 → `update_playlists_map` (src/ytmusic.py:370) | **Writes `1.yaml` (hardcoded)**; excludes `LM`/`SE` |
-| 6 | `distribute` | Add out-of-playlist tracks to playlists | src/cli.py:142 → `distribute_tracks` (src/ytmusic.py:354) | **Mutates YouTube playlists** based on `playlists_map.yaml` artist match |
-| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:524) | yt-dlp + SOCKS5; writes `downloads/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable |
-| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:431) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `downloads/` |
+| 1 | `list` | List playlists | `list_playlists` (src/cli.py:56) → `YTMusicClient.get_playlists/print_playlists` (src/ytmusic.py:165,182) | Prints `title: playlistId` (up to 100 playlists) |
+| 2 | `artists` | Get playlist artists | src/cli.py:64 → `get_playlist/get_playlist_artists` (src/ytmusic.py:220,228) | **Hardcoded to `playlists[1]`** — effectively a debug command |
+| 3 | `tracks` | Count liked tracks not in any playlist | src/cli.py:133 → `get_track_out_playlist` (src/ytmusic.py:327) | Read-only; walks every library playlist (slow on big libraries) |
+| 4 | `print` | Write those tracks out | src/cli.py:136 → `print_tracks` (src/ytmusic.py:367) | Writes `tracks.txt` (artist/title/videoId, TSV) in CWD |
+| 5 | `playlist_map` | Update playlist map | src/cli.py:140 → `update_playlists_map` (src/ytmusic.py:399) | **Writes `1.yaml` (hardcoded)**; excludes `LM`/`SE` |
+| 6 | `distribute` | Add out-of-playlist tracks to playlists | src/cli.py:142 → `distribute_tracks` (src/ytmusic.py:383) | **Mutates YouTube playlists** based on `playlists_map.yaml` artist match |
+| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:569) | yt-dlp + SOCKS5; writes `downloads/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
+| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:460) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `downloads/` |
 
 ## Yandex Music mode
 
