@@ -44,12 +44,15 @@ def main() -> None:
         if not args.no_proxy:
             logger.info(f"Proxy port: {args.proxy_port}")
         
+        ytmusic_download_dir = config.get("ytmusic_download_dir", "downloads")
+        logger.info(f"YouTube Music download directory: {ytmusic_download_dir}")
+        
         # Initialize clients
         logger.info("Initializing Yandex.Music client...")
         yamusic = YaMusicHandle(config["token"])
         
         logger.info("Initializing YouTube Music client...")
-        ytmusic = YTMusicClient()
+        ytmusic = YTMusicClient(ytmusic_download_dir)
         
         logger.info("Successfully initialized both clients")
         

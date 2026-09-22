@@ -45,8 +45,8 @@ Handler: `CLI.handle_ytmusic_command` (src/cli.py:127).
 | 4 | `print` | Write those tracks out | src/cli.py:136 → `print_tracks` (src/ytmusic.py:367) | Writes `tracks.txt` (artist/title/videoId, TSV) in CWD |
 | 5 | `playlist_map` | Update playlist map | src/cli.py:140 → `update_playlists_map` (src/ytmusic.py:399) | **Writes `1.yaml` (hardcoded)**; excludes `LM`/`SE` |
 | 6 | `distribute` | Add out-of-playlist tracks to playlists | src/cli.py:142 → `distribute_tracks` (src/ytmusic.py:383) | **Mutates YouTube playlists** based on `playlists_map.yaml` artist match |
-| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:569) | yt-dlp + SOCKS5; writes `downloads/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
-| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:460) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `downloads/` |
+| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:569) | yt-dlp + SOCKS5; writes `<ytmusic_download_dir>/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
+| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:460) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `<ytmusic_download_dir>/` |
 
 ## Yandex Music mode
 
@@ -67,8 +67,8 @@ Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
 |---------|--------|
 | YT 4 | `tracks.txt` |
 | YT 5 | `1.yaml` |
-| YT 7 | `downloads/<Playlist>/*.mp3`, `downloads/<Playlist>/track_map_<Playlist>.yaml`, `logs/download_log_*.log`, `logs/music_api_*.log` |
-| YT 8 | `downloads/<artist> - <title>.mp3` |
+| YT 7 | `<ytmusic_download_dir>/<Playlist>/*.mp3`, `<ytmusic_download_dir>/<Playlist>/track_map_<Playlist>.yaml`, `logs/download_log_*.log`, `logs/music_api_*.log` |
+| YT 8 | `<ytmusic_download_dir>/<artist> - <title>.mp3` |
 | Ya 1 | `logs/tracks.json` (or `--output`) |
 | Ya 2/3 | `downloads/<Playlist>/*.mp3` |
 | Ya 4 | `temp_playlist_map.yaml` |

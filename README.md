@@ -51,6 +51,7 @@ ytmusicapi browser
 
 ```yaml
 token: "your_yandex_token"
+ytmusic_download_dir: downloads   # optional; where YouTube Music MP3s are saved
 ```
 
 ### Re-exporting browser.json
@@ -97,7 +98,7 @@ The tool is an interactive menu. First pick an API mode, then issue commands.
 | 4 | Print tracks to file | Writes `tracks.txt` (`artist<TAB>title<TAB>videoId`) |
 | 5 | Update playlist map | Writes an updated map (currently hardcoded output `1.yaml`) |
 | 6 | Distribute tracks by playlists | Adds "out-of-playlist" tracks to playlists using `playlists_map.yaml` artist matching |
-| 7 | Download all user playlists | Downloads every playlist as MP3 into `downloads/<Playlist>/` via yt-dlp |
+| 7 | Download all user playlists | Downloads every playlist as MP3 into `<ytmusic_download_dir>/<Playlist>/` via yt-dlp |
 | 8 | Download track | Downloads a single hardcoded demo video ID |
 
 ### Yandex Music mode
@@ -137,7 +138,7 @@ playlists_map.yaml      YouTube playlist map: title -> {id, artists}
 yamusic.yaml            Yandex playlist map: title -> {kind, artists}
 browser.json            YouTube Music browser auth (sensitive!)
 ex_config.yaml          Example config template
-downloads/              Downloaded MP3s, one folder per playlist (+ track_map_*.yaml)
+downloads/              Downloaded MP3s (Yandex Music; YouTube Music can be redirected via ytmusic_download_dir)
 logs/                   Run logs and transfer result JSON
 tracks.txt              Output of "Print tracks to file"
 ```
@@ -146,7 +147,7 @@ tracks.txt              Output of "Print tracks to file"
 
 - `playlists_map.yaml` — YouTube Music side. Each key is a playlist title (colons replaced by ` -`), value: `{id: <playlistId>, artists: [...]}`. Used by *Distribute tracks* to decide which playlist a track belongs to.
 - `yamusic.yaml` — Yandex Music side. Each key is a playlist title, value: `{kind: <playlist kind>, artists: [...]}`. Used by *Sync playlists from yaml*; playlists missing `kind` are created automatically.
-- `downloads/<Playlist>/track_map_<Playlist>.yaml` — per-playlist download bookkeeping: `video_id -> {title, artist, file_path, downloaded_at}`. Used to skip already-downloaded tracks; delete an entry to force re-download.
+- `<ytmusic_download_dir>/<Playlist>/track_map_<Playlist>.yaml` — per-playlist download bookkeeping: `video_id -> {title, artist, file_path, downloaded_at}`. Used to skip already-downloaded tracks; delete an entry to force re-download.
 
 ## Logging & outputs
 

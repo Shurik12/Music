@@ -69,7 +69,9 @@ from src.track import Track
 class YTMusicClient:
     def __init__(
         self,
+        download_dir: str = "downloads",
     ):
+        self.download_dir = download_dir
         session = requests.Session()
         session.proxies = {
             "http": "socks5://127.0.0.1:1080",
@@ -460,7 +462,7 @@ class YTMusicClient:
     def download_track(
         self, 
         video_id: str, 
-        output_path: str = "downloads",
+        output_path: Optional[str] = None,
         format_type: str = "mp3",
         quality: str = "best",
         progress_hooks: Optional[List[callable]] = None,
@@ -469,6 +471,7 @@ class YTMusicClient:
         """
         Download a single track from YouTube using yt-dlp.
         """
+        output_path = output_path or self.download_dir
         import sys
         from contextlib import contextmanager
         
@@ -568,7 +571,7 @@ class YTMusicClient:
         
     def download_all_playlists(
         self,
-        base_output_path: str = "downloads",
+        base_output_path: Optional[str] = None,
         format_type: str = "mp3",
         quality: str = "best",
         skip_existing: bool = True,
@@ -579,7 +582,7 @@ class YTMusicClient:
         Checks track existence using video IDs and stores a map for each playlist.
         
         Args:
-            base_output_path: Base directory for downloads (creates playlist subfolders)
+            base_output_path: Base directory for downloads (defaults to the client's download_dir)
             format_type: Audio format (mp3, m4a, etc.)
             quality: Audio quality (best, high, medium, low)
             skip_existing: If True, skip already downloaded tracks using video ID tracking
@@ -588,6 +591,7 @@ class YTMusicClient:
         Returns:
             Dictionary with playlist names as keys and download statistics as values
         """
+        base_output_path = base_output_path or self.download_dir
         # Get all playlists
         print("\nFetching playlists...")
         playlists = self.get_playlists(limit=playlist_limit)

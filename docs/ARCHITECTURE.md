@@ -102,7 +102,7 @@ Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'`), the two menus and di
 `update_playlists_map` (src/ytmusic.py:399): list playlists, drop `LM`/`SE`, for each fetch full playlist + artist set → `title(':'→' -') → {id, artists}` YAML.
 
 ### 5. Download all playlists (YT)
-`download_all_playlists` (src/ytmusic.py:569): per playlist (excluding `LM`/`SE`) → folder `downloads/<safe_title>/` → load `track_map_<safe_title>.yaml` if present → skip tracks whose `videoId` is in the map **and** whose file still exists on disk → download via `download_track` (yt-dlp) → update map (every 5 entries + at end) → aggregate stats printed and logged. A `None` return from `download_track` counts as a failure and the reason is in `logs/download_log_<ts>.log`.
+`download_all_playlists` (src/ytmusic.py:569): per playlist (excluding `LM`/`SE`) → folder `<ytmusic_download_dir>/<safe_title>/` → load `track_map_<safe_title>.yaml` if present → skip tracks whose `videoId` is in the map **and** whose file still exists on disk → download via `download_track` (yt-dlp) → update map (every 5 entries + at end) → aggregate stats printed and logged. A `None` return from `download_track` counts as a failure and the reason is in `logs/download_log_<ts>.log`.
 
 ### 6. Sync playlists from YAML (Ya, destructive)
 `sync_playlists_from_yaml` (src/yamusic.py:189): read `yamusic.yaml` → index existing playlists by title → create missing ones (`users_playlists_create`) → **clear** each playlist (`delete_tracks_from_playlist`) → select liked tracks where `track artists ∩ playlist artists ≠ ∅` → insert in batches of 50 with the latest revision per batch (API limit workaround).
@@ -114,12 +114,12 @@ Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'`), the two menus and di
 
 | File | Written by | Schema |
 |------|-----------|--------|
-| `config.yaml` | user | `token: <yandex OAuth>` (flat; gitignored) |
+| `config.yaml` | user | `token: <yandex OAuth>`, optional `ytmusic_download_dir: <path>` (YT output root, default `downloads`; flat; gitignored) |
 | `ex_config.yaml` | repo | template for the above |
 | `browser.json` | `ytmusicapi browser` | ytmusicapi headers-auth file (live cookies; sensitive) |
 | `playlists_map.yaml` | YT menu 5 / user | `Title: {id: PLxxxx, artists: [..]}` |
 | `yamusic.yaml` | Ya menu 4 / user | `Title: {kind: 1084, artists: [..]}` |
-| `downloads/<P>/track_map_<P>.yaml` | flow 5 | `<video_id>: {video_id, title, artist, file_path, filename, playlist, playlist_id, downloaded_at}` |
+| `<ytmusic_download_dir>/<P>/track_map_<P>.yaml` | flow 5 | `<video_id>: {video_id, title, artist, file_path, filename, playlist, playlist_id, downloaded_at}` |
 | `tracks.txt` | YT menu 4 | TSV: `artist \t title \t videoId` |
 | `logs/tracks.json` | flow 1 | `{liked_tracks: [{artist,name}], not_found: [...], errors: [...]}` |
 | `logs/music_api_<ts>.log` | src/logger.py | timestamped app log |

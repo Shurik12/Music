@@ -22,7 +22,7 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 
 | File | Role |
 |------|------|
-| `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config.yaml` → `config["token"]` → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. Relative `--output` is redirected into `logs/` (main.py:29). |
+| `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config.yaml` → `config["token"]` + `ytmusic_download_dir` (default `downloads`) → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. Relative `--output` is redirected into `logs/` (main.py:29). |
 | `src/cli.py` | Interactive menu loop (`CLI`, src/cli.py:6). Mode select → YT or Ya menu → dispatch to clients. Contains hardcoded demo values (see Gotchas). |
 | `src/yamusic.py` | `YaMusicHandle`: liked-track export, playlist map generation, Yandex playlist sync/CRUD, Yandex downloads (uses `yandex_music` built-in downloader). |
 | `src/ytmusic.py` | `YTMusicClient`: `ytmusicapi` wrapper — search/like import, playlist CRUD, "tracks out of playlist" detection, yt-dlp MP3 downloads, per-playlist `track_map_*.yaml`. Also configures logging **at import time**. |
@@ -56,7 +56,7 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - **Proxy is hardcoded** to `socks5://127.0.0.1:1080` in two places in `src/ytmusic.py` (API session ~line 75, yt-dlp opts ~line 499). `--no-proxy`/`--proxy-port` are parsed and logged but never wired; `--log-file` is parsed and unused.
 - **Destructive commands exist.** Yandex menu 5 removes broken liked tracks; menu 6 clears each `yamusic.yaml` playlist before repopulating. Never trigger these in a test/demo without explicit user consent.
 - **Transfer reverses order** before importing (src/cli.py:85) to mirror Yandex like chronology.
-- **`config.yaml` schema is flat** (`token: ...`). `ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
+- **`config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads). `ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
 - **`src/yamusic.py:75`** has a bare `except` that swallows all errors in `get_playlist_artists` — be aware when debugging missing artists.
 
 ## Security
