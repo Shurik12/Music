@@ -1,4 +1,5 @@
 venv/
+.venv/
 config.yaml
 browser.json
 __pycache__/

@@ -15,16 +15,17 @@ It can:
 
 - Linux, Python **3.12+** (the code uses PEP 701 f-strings with nested quotes)
 - `ffmpeg` (required by yt-dlp for MP3 conversion): `sudo apt install ffmpeg`
+- [uv](https://docs.astral.sh/uv/) for dependency management (`uv sync`)
 - Node.js **≥20** (or deno) — yt-dlp needs a JS runtime for YouTube extraction; the EJS solver script is fetched from GitHub on first use and then cached
 - A local SOCKS5 proxy on `127.0.0.1:1080` (e.g. ciadpi; Tor would be `9150`). The YouTube Music API client and yt-dlp are hardcoded to use it — see the [known issues](docs/ARCHITECTURE.md).
 - Accounts / credentials:
   - Yandex Music OAuth token
   - YouTube Music browser auth (`browser.json`, export with `ytmusicapi browser`)
 
-Python dependencies (`requirements.txt`):
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) — declared in `pyproject.toml`, pinned in `uv.lock`:
 
 ```
-yandex-music  ytmusicapi  tqdm  pyyaml  requests[socks]  yt_dlp
+yandex-music  ytmusicapi  tqdm  pyyaml  requests[socks]  yt-dlp
 ```
 
 ## Setup
@@ -32,19 +33,15 @@ yandex-music  ytmusicapi  tqdm  pyyaml  requests[socks]  yt_dlp
 ```bash
 cd ~/git/Music
 
-# 1. Virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# 1. Dependencies (creates .venv and installs from uv.lock)
+uv sync
 
-# 2. Dependencies
-pip install -r requirements.txt        # or: make requirements
-
-# 3. Configuration
+# 2. Configuration
 cp ex_config.yaml config.yaml          # config.yaml is gitignored
-$EDITOR config.yaml                    # put your Yandex Music token here
+$EDITOR config.yaml                    # Yandex Music token (+ optional ytmusic_download_dir)
 
-# 4. YouTube Music auth (browser.json in the repo root)
-ytmusicapi browser
+# 3. YouTube Music auth (browser.json in the repo root)
+uv run ytmusicapi browser
 ```
 
 `config.yaml` is a flat YAML file:
@@ -65,14 +62,14 @@ YouTube auth expires after a while (Google session cookies go stale). Symptoms: 
 4. Run the setup and paste:
 
    ```bash
-   cd ~/git/Music && source venv/bin/activate && ytmusicapi browser
+   cd ~/git/Music && uv run ytmusicapi browser
    # paste the copied block, then press Ctrl+D
    ```
 
    File-based alternative: save the copied block to `/tmp/yt_headers.txt`, then
 
    ```bash
-   venv/bin/python -c "from ytmusicapi.setup import setup; setup('browser.json', open('/tmp/yt_headers.txt').read())"
+   uv run python -c "from ytmusicapi.setup import setup; setup('browser.json', open('/tmp/yt_headers.txt').read())"
    ```
 
 5. Sanity check: the pasted block must include a line containing `cookie:` with `__Secure-3PAPISID`. `ytmusicapi` silently drops pasted lines that don't contain `': '` — a missing cookie line is the most common export failure.
@@ -82,8 +79,7 @@ YouTube auth expires after a while (Google session cookies go stale). Symptoms: 
 ## Usage
 
 ```bash
-source venv/bin/activate
-python3 main.py            # or: make run
+uv run main.py             # or: make run
 ```
 
 The tool is an interactive menu. First pick an API mode, then issue commands.
@@ -138,6 +134,8 @@ playlists_map.yaml      YouTube playlist map: title -> {id, artists}
 yamusic.yaml            Yandex playlist map: title -> {kind, artists}
 browser.json            YouTube Music browser auth (sensitive!)
 ex_config.yaml          Example config template
+pyproject.toml          Project metadata and dependencies (uv)
+uv.lock                 Locked dependency versions
 downloads/              Downloaded MP3s (Yandex Music; YouTube Music can be redirected via ytmusic_download_dir)
 logs/                   Run logs and transfer result JSON
 tracks.txt              Output of "Print tracks to file"
@@ -161,13 +159,13 @@ tracks.txt              Output of "Print tracks to file"
 - **YouTube Music returns empty results (no error)** — `browser.json` has expired: account endpoints silently return the logged-out view. The app warns about this at startup. Re-export it (see [Re-exporting browser.json](#re-exporting-browserjson)).
 - **`Your cookie is missing the required value __Secure-3PAPISID`** — the exported headers didn't include the `cookie` header. Re-copy using **Copy as fetch (Node.js)** or *Copy request headers* — plain *Copy as fetch* strips cookies — and make sure the paste contains a line starting with `cookie:` (details in [Re-exporting browser.json](#re-exporting-browserjson)).
 - **All YouTube requests fail / time out** — the tool expects a SOCKS5 proxy on `127.0.0.1:1080`. Start ciadpi (or edit the proxy in `src/ytmusic.py`).
-- **Downloads fail with HTTP 403 errors** — usually an outdated yt-dlp (the 2026.3.17 build failed every download; 2026.08.19 works). Update it: `pip install -U yt-dlp`. Recent yt-dlp versions need node ≥20 (or deno) and fetch the EJS solver from GitHub on first run. The exact yt-dlp error is logged to `logs/download_log_<timestamp>.log` (see *Known issues* in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
+- **Downloads fail with HTTP 403 errors** — usually an outdated yt-dlp (the 2026.3.17 build failed every download; 2026.08.19 works). Update it: `uv lock --upgrade-package yt-dlp && uv sync`. Recent yt-dlp versions need node ≥20 (or deno) and fetch the EJS solver from GitHub on first run. The exact yt-dlp error is logged to `logs/download_log_<timestamp>.log` (see *Known issues* in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - **`config.yaml` not found** — you must create it from `ex_config.yaml`; it is intentionally gitignored.
 - **MP3 conversion fails** — install `ffmpeg`.
 
 ## Security notes
 
-- `config.yaml` (real token) and `venv/` are gitignored — keep it that way.
+- `config.yaml` (real token) and `.venv/` are gitignored — keep it that way.
 - `browser.json` contains live YouTube auth cookies. It is now gitignored and untracked, but it was committed previously — if this repo was ever pushed anywhere, rotate the cookies (re-run `ytmusicapi browser`) and avoid re-adding the file.
 - `downloads/`, `logs/` and `__pycache__/` are generated and gitignored.
 

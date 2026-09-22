@@ -6,8 +6,8 @@ Implementation column points to `file:line` of the handler and the client method
 ## Startup
 
 ```bash
-source venv/bin/activate
-python3 main.py [flags]        # or: make run
+uv sync                        # first time / after dependency changes
+uv run main.py [flags]         # or: make run
 ```
 
 ### Flags (src/args.py)
@@ -78,7 +78,6 @@ Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
 
 | Target | Effect |
 |--------|--------|
-| `make run` | `python3 main.py` |
-| `make venv` | Creates `venv/` |
-| `make requirements` | `pip install -r requirements.txt` |
-| `make clean` | Removes `__pycache__` directories (skips `venv/`) |
+| `make run` | `uv run main.py` |
+| `make sync` | `uv sync` — creates/updates `.venv` from `uv.lock` |
+| `make clean` | Removes `__pycache__` directories (skips `venv/`, `.venv/`) |

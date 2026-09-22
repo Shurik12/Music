@@ -1,0 +1,14 @@
+# No [build-system] on purpose: this is an application, uv installs dependencies only.
+[project]
+name = "music"
+version = "0.1.0"
+description = "Yandex Music <-> YouTube Music sync and MP3 downloader CLI"
+requires-python = ">=3.12"
+dependencies = [
+    "yandex-music",
+    "ytmusicapi",
+    "tqdm",
+    "pyyaml",
+    "requests[socks]",
+    "yt-dlp",
+]

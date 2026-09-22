@@ -1,6 +1,0 @@
-yandex-music
-ytmusicapi
-tqdm
-pyyaml
-requests[socks]
-yt_dlp

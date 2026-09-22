@@ -10,13 +10,13 @@ A personal, interactive Python CLI that syncs a music library between **Yandex M
 
 ```bash
 cd ~/git/Music
-source venv/bin/activate          # venv already exists; Python 3.12
-python3 main.py                   # or: make run
+uv sync                           # creates/updates .venv from uv.lock (Python 3.12)
+uv run main.py                    # or: make run
 ```
 
 Smoke check after any change: start the app, choose a mode, press `q` to quit. Anything beyond that touches live accounts (Yandex API + YouTube Music with real auth), so run real commands only with consent.
 
-Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dlp JS runtime), a local SOCKS5 proxy at `127.0.0.1:1080`, `config.yaml` (Yandex token, gitignored) and `browser.json` (YouTube auth).
+Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dlp JS runtime), a local SOCKS5 proxy at `127.0.0.1:1080`, `uv` (dependency management), `config.yaml` (Yandex token, gitignored) and `browser.json` (YouTube auth).
 
 ## Architecture map
 
@@ -64,7 +64,7 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - `config.yaml` holds a live Yandex token and is gitignored. Never print it or copy it into docs/logs.
 - `browser.json` holds live YouTube auth cookies. It is now gitignored and untracked (previously committed — the cookies were exposed, rotate them). Do not paste its contents anywhere. Re-export procedure: README → *Re-exporting browser.json* — use DevTools **Copy as fetch (Node.js)**, not plain *Copy as fetch* (which drops the `Cookie` header).
 - Do not add real tokens/cookies to `ex_config.yaml` or any tracked file.
-- `downloads/`, `logs/`, `__pycache__/`, `venv/`, `config.yaml` and `browser.json` are gitignored — don't force-add them.
+- `downloads/`, `logs/`, `__pycache__/`, `.venv/`, `config.yaml` and `browser.json` are gitignored — don't force-add them.
 
 ## Where to change what
 
