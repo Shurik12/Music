@@ -123,6 +123,28 @@ Self-contained Buildin.ai MCP client (no MCP SDK). It implements:
 integration and tests possible. The transport is protocol-version agnostic in
 practice: it sends `2025-06-18` and adopts whatever version the server returns.
 
+### src/buildin_maps.py — playlist maps ⇄ Buildin database
+
+Syncs `data/playlists_map.yaml` + `data/yamusic.yaml` with a dedicated Buildin
+page/database.
+
+| Function | Line | Purpose |
+|----------|------|---------|
+| `export_maps(client)` | 53 | Seed/update the database from the local YAML maps; matches records by `(Platform, Title)`; batches creates/updates (50) with an idempotency key; reports orphaned records |
+| `import_maps(client)` | 114 | Query the whole database (paginated), validate records, return the two maps plus per-platform diffs; no local writes |
+| `write_imported_maps(result)` | 138 | Atomically rewrite the YAML files with `.bak` backups; skip a platform with zero records |
+| `ensure_resources(client)` | 157 | Find/create the `Music Library` page and `Playlists` database; cache IDs in `config/buildin_music.json` |
+| `query_all(client, db)` | 175 | Cursor pagination over `buildin_query_database` |
+| `_records_to_maps` / `_record_properties` | 231 / 223 | Buildin record ⇄ `{id|kind, artists}` conversion |
+| `_find_page` / `_find_database` / `_create_*` | 409-485 | Discovery and creation of the page/database |
+| `_call` | 568 | `tools/call` wrapper that parses the JSON text payload and raises `MapSyncError` on `isError` |
+
+Database schema: `Title` (title), `Platform` (select: YouTube/Yandex),
+`External ID` (rich_text), `Artists` (rich_text, newline-separated). Titles are
+normalized with `:` → ` -` on import, matching the YAML key convention.
+Buildin records cannot be deleted through MCP, so removed playlists must be
+deleted in the UI.
+
 ### Support modules
 
 - `src/paths.py` — project-wide path constants and helpers (`ensure_directories`, `resolve`, `resolve_config`, `browser_auth_file`). All paths anchor to the repo root; no module should use bare relative filenames.
@@ -157,6 +179,9 @@ practice: it sends `2025-06-18` and adopts whatever version the server returns.
 ### 8. Buildin AI (MCP)
 `CLI.buildin_login` (src/cli.py:200) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:235,257) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
 
+### 9. Playlist maps ⇄ Buildin database
+`export_maps` (src/buildin_maps.py:53): local YAML → desired records → ensure page/database → query existing records → create/update in batches of 50 via `buildin_mutate_database` (idempotency key per batch) → report unchanged/orphaned. `import_maps` (src/buildin_maps.py:114): `ensure_resources` → `buildin_query_database` paginated → validate platform/external id/kind → return maps + diffs → CLI confirmation → `write_imported_maps` writes both YAML files atomically with `.bak` backups (a platform with no Buildin records keeps its local file).
+
 ## File schemas
 
 | File | Written by | Schema |
@@ -165,6 +190,7 @@ practice: it sends `2025-06-18` and adopts whatever version the server returns.
 | `config/ex_config.yaml` | repo | template for the above |
 | `config/browser.json` | `ytmusicapi browser --file config/browser.json` | ytmusicapi headers-auth file (live cookies; sensitive) |
 | `config/buildin_tokens.json` | Buildin menu 1 | OAuth token set: `{access_token, refresh_token, token_type, scope, expires_in, expires_at, client_id, client_secret?, redirect_uri, resource, token_endpoint}`; mode 0600; gitignored |
+| `config/buildin_music.json` | Buildin menu 6 | `{page_id, database_id}` cache for the `Music Library` page and `Playlists` database; gitignored |
 | `data/playlists_map.yaml` | YT menu 5 / user | `Title: {id: PLxxxx, artists: [..]}` |
 | `data/playlists_map_updated.yaml` | YT menu 5 | same schema; staging copy produced by the update command |
 | `data/yamusic.yaml` | Ya menu 4 / user | `Title: {kind: 1084, artists: [..]}` |
@@ -196,4 +222,4 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 8. `get_playlist_artists` (YT) assumes `track["artists"]` is present for every track; malformed entries raise.
 9. **yt-dlp must be kept current.** The old build (2026.3.17) failed every YouTube download with a 403 on the media request; updating yt-dlp (2026.08.19) fixed it. When downloads suddenly 403 again, update yt-dlp first. Note: the `download_track` opts (`js_runtimes`, `remote_components`) are required on modern yt-dlp for YouTube extraction.
 10. `make clean` removes `__pycache__` only; `downloads/` cleanup is manual.
-11. **Buildin integration is transport-only.** `BuildinClient` exposes generic `list_tools` / `call_tool`; no music-specific workflow (exporting maps, categorizing tracks, etc.) is wired yet. Adding one should go through the CLI Buildin helpers or a new module that composes both clients.
+11. **Buildin map sync has no record deletion.** `BuildinClient` is generic, and `src/buildin_maps.py` adds the playlist-map workflow; the Buildin MCP API exposes no record-deletion tool, so removing a playlist locally leaves an orphan in Buildin (export reports it) that must be deleted in the UI. Importing keeps a platform's local YAML file when Buildin has no records for that platform, to avoid accidental wipes.

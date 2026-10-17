@@ -3,6 +3,7 @@ venv/
 config/config.yaml
 config/browser.json
 config/buildin_tokens.json
+config/buildin_music.json
 # Legacy locations (pre config/ layout); browser.json was committed historically.
 config.yaml
 browser.json

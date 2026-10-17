@@ -75,12 +75,24 @@ network calls.
 | 3 | `tools` | List MCP tools | `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
 | 4 | `call` | Call an MCP tool | `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
 | 5 | `logout` | Forget tokens | `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
+| 6 | `export_maps` | Export playlist maps to Buildin | `buildin_export_maps` (src/cli.py:305) → `export_maps` (src/buildin_maps.py:53) | Creates/reuses the *Music Library* page + *Playlists* database, then creates/updates one record per playlist (matched by Platform+Title); remote write |
+| 7 | `import_maps` | Import playlist maps from Buildin | `buildin_import_maps` (src/cli.py:326) → `import_maps` / `write_imported_maps` (src/buildin_maps.py:114,138) | Reads the database, prints a per-platform diff, asks `y/n`, then rewrites `data/playlists_map.yaml` and `data/yamusic.yaml` with `.bak` backups; keeps a file whose platform has no records |
 
 Transport details (src/buildin.py:435-556): `initialize` +
 `notifications/initialized`, `Mcp-Session-Id`/`MCP-Protocol-Version` headers,
 JSON and `text/event-stream` responses, one automatic token refresh on HTTP
 401, and one session re-initialization on HTTP 404. `BUILDIN_ACCESS_TOKEN`
 overrides the stored access token (useful for scripts/tests).
+
+Buildin map model (src/buildin_maps.py):
+
+- Page `Music Library` (top-level, created on first export) → database `Playlists`.
+- Record properties: `Title`, `Platform` (`YouTube`/`Yandex`), `External ID`
+  (YouTube playlist id / Yandex kind), `Artists` (one name per line).
+- Page/database IDs are cached in `config/buildin_music.json`; delete it to
+  force rediscovery.
+- Buildin has no record-deletion tool: locally removed playlists are reported
+  as orphaned by export and must be deleted in the Buildin UI.
 
 ## Direct file outputs
 
@@ -96,6 +108,8 @@ All paths are relative to the repository root (see `src/paths.py`).
 | Ya 2/3 | `downloads/<Playlist>/*.mp3` |
 | Ya 4 | `data/temp_playlist_map.yaml` |
 | Buildin 1 | `config/buildin_tokens.json` |
+| Buildin 6 | Buildin page/database; `config/buildin_music.json` (ID cache) |
+| Buildin 7 | `data/playlists_map.yaml`, `data/yamusic.yaml` (+ `.bak` copies) |
 | every run | `logs/music_api_<timestamp>.log` |
 
 ## Makefile targets

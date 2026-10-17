@@ -5,6 +5,7 @@ from datetime import datetime
 from .yamusic import YaMusicHandle
 from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
+from .buildin_maps import MapSyncError, export_maps, import_maps, write_imported_maps
 
 class CLI:
     def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient, buildin: BuildinClient, args):
@@ -68,6 +69,8 @@ class CLI:
         print("3. List MCP tools")
         print("4. Call MCP tool")
         print("5. Log out")
+        print("6. Export playlist maps to Buildin")
+        print("7. Import playlist maps from Buildin")
         print("b, back - Return to mode selection")
         print("q, quit, exit - Exit program")
         print("="*50)
@@ -299,6 +302,71 @@ class CLI:
         self.buildin.logout()
         print("Buildin tokens removed.")
     
+    def buildin_export_maps(self):
+        if not self.buildin_ensure_login():
+            return
+        print("Exporting local playlist maps to Buildin...")
+        try:
+            result = export_maps(self.buildin)
+        except MapSyncError as e:
+            print(f"Buildin export failed: {e}")
+            return
+        
+        print(f"Page:     {result['page_id']}")
+        print(f"Database: {result['database_id']}")
+        print(
+            f"Records:  {result['created']} created, {result['updated']} updated, "
+            f"{result['unchanged']} unchanged (total {result['total']})"
+        )
+        if result["orphaned"]:
+            print("Orphaned in Buildin (no local counterpart; delete manually in the UI):")
+            for platform, title in result["orphaned"]:
+                print(f"  - {platform}: {title}")
+    
+    def buildin_import_maps(self):
+        if not self.buildin_ensure_login():
+            return
+        print("Reading playlist maps from Buildin...")
+        try:
+            result = import_maps(self.buildin)
+        except MapSyncError as e:
+            print(f"Buildin import failed: {e}")
+            return
+        
+        print(
+            f"Records: {result['records']} | YouTube: {len(result['youtube'])} | "
+            f"Yandex: {len(result['yandex'])}"
+        )
+        for platform, key in (("YouTube", "youtube_diff"), ("Yandex", "yandex_diff")):
+            diff = result[key]
+            print(
+                f"{platform} changes vs local: +{len(diff['added'])} "
+                f"-{len(diff['removed'])} ~{len(diff['changed'])}"
+            )
+            for label in ("added", "removed", "changed"):
+                values = diff[label]
+                for value in values[:10]:
+                    print(f"  {label}: {value}")
+                if len(values) > 10:
+                    print(f"  ... {len(values) - 10} more {label}")
+        
+        if not result["youtube"]:
+            print("No YouTube records in Buildin — data/playlists_map.yaml will be kept.")
+        if not result["yandex"]:
+            print("No Yandex records in Buildin — data/yamusic.yaml will be kept.")
+        if not result["youtube"] and not result["yandex"]:
+            return
+        
+        confirm = input("\nOverwrite local YAML maps with the Buildin data? (y/n): ")
+        if confirm.strip().lower() not in ("y", "yes"):
+            print("Import cancelled.")
+            return
+        
+        written = write_imported_maps(result)
+        print("Written:")
+        for path in written:
+            print(f"  {path} (backup: {path}.bak)")
+    
     def handle_buildin_command(self, command):
         """Handle Buildin AI specific commands"""
         if command in ['1', 'login']:
@@ -311,6 +379,10 @@ class CLI:
             self.buildin_call_tool()
         elif command in ['5', 'logout']:
             self.buildin_logout()
+        elif command in ['6', 'export_maps', 'export-maps']:
+            self.buildin_export_maps()
+        elif command in ['7', 'import_maps', 'import-maps']:
+            self.buildin_import_maps()
         elif command in ['b', 'back']:
             self.mode = None
             print("Returning to mode selection...")

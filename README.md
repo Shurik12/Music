@@ -69,8 +69,31 @@ mode `0600`). Tokens refresh automatically; `5` removes them.
 
 For scripts/tests you can bypass the stored token with `BUILDIN_ACCESS_TOKEN`.
 The client is generic: `3` lists the MCP tools exposed by Buildin and `4`
-calls any of them with JSON arguments. Music-specific workflows can be built on
-top of these two methods (`BuildinClient.list_tools` / `call_tool`).
+calls any of them with JSON arguments.
+
+#### Playlist maps as the source of truth
+
+`6` (Export) and `7` (Import) mirror the local playlist maps to/from a
+dedicated Buildin page:
+
+- **Music Library** (top-level page, created on first export)
+- **Playlists** (database under it)
+
+Each record is one playlist with `Title`, `Platform` (`YouTube`/`Yandex`),
+`External ID` (YouTube playlist id or Yandex kind) and `Artists` (one artist
+name per line).
+
+First run `6` to seed the page/database from `data/playlists_map.yaml` and
+`data/yamusic.yaml`. After editing records in Buildin, run `7` to regenerate
+the YAML files — it shows a per-platform diff and asks for confirmation, and
+keeps a `.bak` copy of each file it overwrites. The page/database IDs are
+cached in `config/buildin_music.json` (gitignored).
+
+Caveats: Buildin has no MCP record-deletion tool, so playlists deleted locally
+remain in Buildin (reported as *orphaned* by export) and reappear on the next
+import until you delete them in the Buildin UI. Do not rename the `Platform`,
+`External ID` or `Artists` properties. Titles are stored with `:` replaced by
+` -` to match the YAML key convention.
 
 ### Re-exporting browser.json
 
@@ -138,9 +161,11 @@ The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music o
 | 3 | List MCP tools | Calls `tools/list` and prints tool names + descriptions |
 | 4 | Call MCP tool | Prompts for a tool name and JSON arguments, calls `tools/call`, prints the result |
 | 5 | Log out | Deletes the stored tokens and resets the MCP session |
+| 6 | Export playlist maps to Buildin | Creates/updates the *Music Library* page and its *Playlists* database from the local YAML maps |
+| 7 | Import playlist maps from Buildin | Reads the database, shows a diff, and (after confirmation) rewrites `data/playlists_map.yaml` / `data/yamusic.yaml` with `.bak` backups |
 
-Commands 3 and 4 start the login flow automatically when not authorized. The
-client speaks MCP Streamable HTTP, handles SSE and JSON responses, refreshes
+Commands 3, 4, 6 and 7 start the login flow automatically when not authorized.
+The client speaks MCP Streamable HTTP, handles SSE and JSON responses, refreshes
 expired tokens, and re-initializes the session if the server drops it.
 
 ### CLI flags
@@ -163,6 +188,7 @@ src/yamusic.py          Yandex Music client (transfer, downloads, playlist sync)
 src/ytmusic.py          YouTube Music client (ytmusicapi + yt-dlp downloads)
 src/track.py            Track named tuple (artist, name)
 src/buildin.py          Buildin.ai MCP client (OAuth login, tool calls)
+src/buildin_maps.py     Playlist-map sync with a Buildin database
 src/paths.py            Project-wide path constants (anchored to the repo root)
 src/config.py           YAML config loader
 src/args.py             argparse definitions
@@ -171,6 +197,7 @@ config/config.yaml      Yandex token + settings (gitignored)
 config/ex_config.yaml   Example config template
 config/browser.json     YouTube Music browser auth (sensitive!, gitignored)
 config/buildin_tokens.json  Buildin OAuth tokens (sensitive!, gitignored)
+config/buildin_music.json   Cached Buildin page/database IDs (gitignored)
 data/playlists_map.yaml YouTube playlist map: title -> {id, artists}
 data/yamusic.yaml       Yandex playlist map: title -> {kind, artists}
 pyproject.toml          Project metadata and dependencies (uv)
@@ -184,6 +211,8 @@ logs/                   Run logs, transfer result JSON and tracks.txt
 - `data/playlists_map.yaml` — YouTube Music side. Each key is a playlist title (colons replaced by ` -`), value: `{id: <playlistId>, artists: [...]}`. Used by *Distribute tracks* to decide which playlist a track belongs to.
 - `data/yamusic.yaml` — Yandex Music side. Each key is a playlist title, value: `{kind: <playlist kind>, artists: [...]}`. Used by *Sync playlists from yaml*; playlists missing `kind` are created automatically.
 - `<ytmusic_download_dir>/<Playlist>/track_map_<Playlist>.yaml` — per-playlist download bookkeeping: `video_id -> {title, artist, file_path, downloaded_at}`. Used to skip already-downloaded tracks; delete an entry to force re-download.
+- Buildin *Music Library → Playlists* database — same data as the two YAML maps, one record per playlist (`Title`, `Platform`, `External ID`, `Artists`). Importing writes the YAML files and keeps `<file>.bak` copies.
+- `config/buildin_music.json` — ID cache for the Buildin page/database. Delete it to make the next command rediscover/recreate them.
 
 ## Logging & outputs
 
@@ -204,6 +233,9 @@ All paths are anchored to the repository root, so the CLI can be launched from a
 - **`config/config.yaml` not found** — you must create it from `config/ex_config.yaml`; it is intentionally gitignored.
 - **Buildin login does not complete** — the flow needs a browser and a temporary `127.0.0.1` callback port, and must finish within 5 minutes. If the browser opened on another machine, copy the printed authorization URL to a local browser. Re-run `1` (Log in) to register a fresh callback.
 - **`Buildin session expired and cannot be refreshed`** — run `5` (Log out) then `1` (Log in).
+- **`The Buildin database 'Playlists' is empty`** — run `6` (Export) once to seed it from the local YAML maps.
+- **`Buildin database is missing the 'External ID' property`** — a property was renamed in Buildin. Rename it back (the importer matches by the exact names `Platform`, `External ID`, `Artists`).
+- **Import keeps a YAML file** — when Buildin has zero records for a platform, the corresponding local file is left untouched instead of being wiped.
 - **MP3 conversion fails** — install `ffmpeg`.
 
 ## Security notes
@@ -211,6 +243,7 @@ All paths are anchored to the repository root, so the CLI can be launched from a
 - `config/config.yaml` (real token) and `.venv/` are gitignored — keep it that way.
 - `config/browser.json` contains live YouTube auth cookies. It is now gitignored and untracked, but it was committed previously — if this repo was ever pushed anywhere, rotate the cookies (re-run `ytmusicapi browser --file config/browser.json`) and avoid re-adding the file.
 - `config/buildin_tokens.json` contains Buildin OAuth access/refresh tokens. It is gitignored and written with mode `0600`; never commit or paste it.
+- `config/buildin_music.json` only contains Buildin page/database IDs (no secrets) but is gitignored because it is local state.
 - `downloads/`, `logs/` and `__pycache__/` are generated and gitignored.
 
 ## More documentation

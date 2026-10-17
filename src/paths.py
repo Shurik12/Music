@@ -29,6 +29,7 @@ DEFAULT_CONFIG_FILE = CONFIG_DIR / "config.yaml"
 EXAMPLE_CONFIG_FILE = CONFIG_DIR / "ex_config.yaml"
 BROWSER_AUTH_FILE = CONFIG_DIR / "browser.json"
 BUILDIN_TOKENS_FILE = CONFIG_DIR / "buildin_tokens.json"
+BUILDIN_STATE_FILE = CONFIG_DIR / "buildin_music.json"
 PLAYLISTS_MAP_FILE = DATA_DIR / "playlists_map.yaml"
 YAMUSIC_MAP_FILE = DATA_DIR / "yamusic.yaml"
 
