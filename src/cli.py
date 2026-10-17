@@ -1,15 +1,19 @@
 import json
+import os
+from datetime import datetime
 
 from .yamusic import YaMusicHandle
 from .ytmusic import YTMusicClient
+from .buildin import BuildinClient, BuildinError
 
 class CLI:
-    def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient, args):
+    def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient, buildin: BuildinClient, args):
         self.yamusic = yamusic
         self.ytmusic = ytmusic
+        self.buildin = buildin
         self.args = args
         self.running = True
-        self.mode = None  # 'ytmusic' or 'yamusic'
+        self.mode = None  # 'ytmusic', 'yamusic' or 'buildin'
         
     def print_mode_selection(self):
         """Display mode selection menu"""
@@ -18,6 +22,7 @@ class CLI:
         print("="*50)
         print("1. YouTube Music")
         print("2. Yandex Music")
+        print("3. Buildin AI")
         print("q, quit, exit - Exit program")
         print("="*50)
     
@@ -49,6 +54,20 @@ class CLI:
         print("4. Get playlist map")
         print("5. Playlist changes")
         print("6. Sync playlists from yaml")
+        print("b, back - Return to mode selection")
+        print("q, quit, exit - Exit program")
+        print("="*50)
+    
+    def print_buildin_menu(self):
+        """Display Buildin AI specific menu"""
+        print("\n" + "="*50)
+        print("Buildin AI Commands")
+        print("="*50)
+        print("1. Log in (browser OAuth)")
+        print("2. Show status")
+        print("3. List MCP tools")
+        print("4. Call MCP tool")
+        print("5. Log out")
         print("b, back - Return to mode selection")
         print("q, quit, exit - Exit program")
         print("="*50)
@@ -171,10 +190,137 @@ class CLI:
         else:
             print("Unknown command. Type 'help' to see available commands.")
     
+    def buildin_ensure_login(self) -> bool:
+        """Log in on demand before running a command that needs Buildin auth."""
+        if self.buildin.is_authorized():
+            return True
+        print("Buildin authorization is required for this command.")
+        return self.buildin_login()
+    
+    def buildin_login(self) -> bool:
+        try:
+            data = self.buildin.login()
+        except BuildinError as e:
+            print(f"Buildin login failed: {e}")
+            return False
+        except Exception as e:
+            print(f"Buildin login failed: {type(e).__name__}: {e}")
+            return False
+        
+        expires_at = data.get("expires_at")
+        if expires_at:
+            expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Logged in to Buildin MCP. Access token expires at {expires} (auto-refreshed).")
+        else:
+            print("Logged in to Buildin MCP.")
+        return True
+    
+    def buildin_status(self):
+        status = self.buildin.status()
+        print(f"MCP endpoint: {status['mcp_url']}")
+        print(f"Token file:   {status['token_file']}")
+        if not status["authorized"]:
+            print("Status:       not authorized (use command 1 to log in)")
+            return
+        if os.environ.get("BUILDIN_ACCESS_TOKEN"):
+            print("Status:       authorized via BUILDIN_ACCESS_TOKEN")
+            return
+        expires_at = status.get("expires_at")
+        if expires_at:
+            expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Status:       authorized (token expires at {expires})")
+        else:
+            print("Status:       authorized")
+    
+    def buildin_tools(self):
+        if not self.buildin_ensure_login():
+            return
+        try:
+            tools = self.buildin.list_tools()
+        except BuildinError as e:
+            print(f"Could not list Buildin tools: {e}")
+            return
+        
+        if not tools:
+            print("The Buildin MCP server exposes no tools.")
+            return
+        
+        print(f"{len(tools)} Buildin MCP tools:")
+        for tool in tools:
+            name = tool.get("name", "?")
+            description = " ".join((tool.get("description") or "").split())
+            if description:
+                print(f"  - {name}: {description[:140]}")
+            else:
+                print(f"  - {name}")
+    
+    def buildin_call_tool(self):
+        if not self.buildin_ensure_login():
+            return
+        
+        name = input("Tool name: ").strip()
+        if not name:
+            print("No tool name given.")
+            return
+        
+        raw_arguments = input("Arguments as JSON (empty for {}): ").strip()
+        try:
+            arguments = json.loads(raw_arguments) if raw_arguments else {}
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON arguments: {e}")
+            return
+        if not isinstance(arguments, dict):
+            print("Arguments must be a JSON object.")
+            return
+        
+        try:
+            result = self.buildin.call_tool(name, arguments)
+        except BuildinError as e:
+            print(f"Buildin tool call failed: {e}")
+            return
+        
+        self.print_tool_result(result)
+    
+    def print_tool_result(self, result):
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    print(item.get("text", ""))
+                else:
+                    print(json.dumps(item, indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        
+        if isinstance(result, dict) and result.get("isError"):
+            print("(the tool reported an error)")
+    
+    def buildin_logout(self):
+        self.buildin.logout()
+        print("Buildin tokens removed.")
+    
+    def handle_buildin_command(self, command):
+        """Handle Buildin AI specific commands"""
+        if command in ['1', 'login']:
+            self.buildin_login()
+        elif command in ['2', 'status']:
+            self.buildin_status()
+        elif command in ['3', 'tools']:
+            self.buildin_tools()
+        elif command in ['4', 'call']:
+            self.buildin_call_tool()
+        elif command in ['5', 'logout']:
+            self.buildin_logout()
+        elif command in ['b', 'back']:
+            self.mode = None
+            print("Returning to mode selection...")
+        else:
+            print("Unknown command. Type 'help' to see available commands.")
+    
     def run(self):
         """Main CLI loop"""
         print("\n" + "="*50)
-        print("YouTube Music / Yandex Music CLI")
+        print("YouTube Music / Yandex Music / Buildin AI CLI")
         print("="*50)
         
         while self.running:
@@ -182,7 +328,7 @@ class CLI:
                 # Mode selection
                 if self.mode is None:
                     self.print_mode_selection()
-                    mode_input = input("\nSelect mode (1/2): ").strip().lower()
+                    mode_input = input("\nSelect mode (1/2/3): ").strip().lower()
                     
                     if mode_input in ['q', 'quit', 'exit']:
                         print("Goodbye!")
@@ -196,8 +342,12 @@ class CLI:
                         self.mode = 'yamusic'
                         print("\nSwitched to Yandex Music mode")
                         self.print_yamusic_menu()
+                    elif mode_input in ['3', 'buildin', 'ai']:
+                        self.mode = 'buildin'
+                        print("\nSwitched to Buildin AI mode")
+                        self.print_buildin_menu()
                     else:
-                        print("Invalid mode selection. Please choose 1 or 2.")
+                        print("Invalid mode selection. Please choose 1, 2 or 3.")
                 
                 # YouTube Music mode
                 elif self.mode == 'ytmusic':
@@ -222,6 +372,18 @@ class CLI:
                         self.print_yamusic_menu()
                     else:
                         self.handle_yamusic_command(command)
+                
+                # Buildin AI mode
+                elif self.mode == 'buildin':
+                    command = input("\n[Buildin] Enter command (or 'help' for menu): ").strip().lower()
+                    
+                    if command in ['q', 'quit', 'exit']:
+                        print("Goodbye!")
+                        self.running = False
+                    elif command in ['help', '?', '']:
+                        self.print_buildin_menu()
+                    else:
+                        self.handle_buildin_command(command)
             
             except KeyboardInterrupt:
                 print("\n\nGoodbye!")

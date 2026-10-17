@@ -11,6 +11,7 @@ main.py
   ├── YaMusicHandle   (src/yamusic.py)  ──►  Yandex Music API  (yandex_music lib, direct)
   ├── YTMusicClient   (src/ytmusic.py)  ──►  YouTube Music API (ytmusicapi)
   │                                     ──►  YouTube downloads (yt-dlp, SOCKS5)
+  ├── BuildinClient   (src/buildin.py)  ──►  Buildin MCP (OAuth 2.1 + Streamable HTTP)
   │
   └── CLI             (src/cli.py)      interactive loop, dispatches to both clients
 ```
@@ -38,12 +39,13 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 2. `parse_args()` (src/args.py:4) — see flags in COMMANDS.md.
 3. Relative `--output` is rebased into `logs/` (main.py:30-31).
 4. `setup_logging()` (src/logger.py:9) — root logger → console (stdout) + `logs/music_api_<ts>.log`.
-5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py:55` uses `config["token"]`.
+5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py:57` uses `config["token"]`.
 6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
 7. `YTMusicClient()` (src/ytmusic.py:72) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:91), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable.
-8. `CLI(yamusic, ytmusic, args).run()` (src/cli.py:174) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
+8. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
+9. `CLI(yamusic, ytmusic, buildin, args).run()` (src/cli.py:320) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
 
-Any exception in startup is caught in `main.py:71`, logged with traceback, exit code 1.
+Any exception in startup is caught in `main.py:83`, logged with traceback, exit code 1.
 
 ## Module reference
 
@@ -93,7 +95,33 @@ Wraps `ytmusicapi.YTMusic` plus yt-dlp. **Module import has side effects**: conf
 
 ### src/cli.py — `CLI`
 
-Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'`), the two menus and dispatch. `move_tracks()` (line 76) implements the transfer flow and JSON report; everything else is thin glue. Contains hardcoded demo values — see Gotchas in AGENTS.md.
+Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'` / `'buildin'`), the three menus and dispatch. `move_tracks()` (line 95) implements the transfer flow and JSON report; everything else is thin glue. Buildin helpers live at src/cli.py:193-318. Contains hardcoded demo values — see Gotchas in AGENTS.md.
+
+### src/buildin.py — `BuildinClient`
+
+Self-contained Buildin.ai MCP client (no MCP SDK). It implements:
+
+- **OAuth**: metadata discovery from `/.well-known/oauth-protected-resource` and `.well-known/oauth-authorization-server`, dynamic client registration (public client, `none` auth method), PKCE S256, a temporary `127.0.0.1` callback server (5-minute timeout), JSON token exchange with a form-encoded fallback, refresh-token grant, and a 0600 token file at `config/buildin_tokens.json`.
+- **MCP Streamable HTTP**: `initialize` → `notifications/initialized`, `Mcp-Session-Id` / `MCP-Protocol-Version` headers, JSON *and* `text/event-stream` response parsing, one refresh on 401, one session re-init on 404.
+- **Generic tools**: `list_tools()` → `tools/list`, `call_tool(name, arguments)` → `tools/call`.
+
+| Method | Line | Purpose |
+|--------|------|---------|
+| `is_authorized()` / `status()` | 148 / 153 | Token presence + expiry info; no network |
+| `login()` | 164 | Full OAuth flow; persists tokens |
+| `logout()` | 223 | Deletes tokens, resets session |
+| `list_tools()` | 227 | Returns the server's tool list |
+| `call_tool(name, args)` | 231 | Invokes a tool; returns the MCP `result` dict |
+| `_discover_metadata()` | 236 | OAuth resource + authorization-server discovery |
+| `_register_client()` | 281 | RFC 7591 dynamic client registration |
+| `_wait_for_callback()` | 317 | Waits for the local OAuth callback |
+| `_token_request()` / `_refresh()` | 339 / 369 | Token exchange and refresh |
+| `_ensure_session()` / `_rpc()` | 435 / 479 | MCP session lifecycle and JSON-RPC calls |
+| `_read_response()` / `_read_sse()` | 506 / 529 | JSON and SSE response decoding |
+
+`BUILDIN_ACCESS_TOKEN` bypasses the stored token, which makes headless
+integration and tests possible. The transport is protocol-version agnostic in
+practice: it sends `2025-06-18` and adopts whatever version the server returns.
 
 ### Support modules
 
@@ -126,13 +154,17 @@ Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'`), the two menus and di
 ### 7. Check liked tracks (Ya, destructive)
 `check_tracks` (src/yamusic.py:308): fetch each liked short track; if fetch raises, remove it from likes (`users_likes_tracks_remove`). Cleans up dead/region-blocked entries.
 
+### 8. Buildin AI (MCP)
+`CLI.buildin_login` (src/cli.py:200) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:235,257) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
+
 ## File schemas
 
 | File | Written by | Schema |
 |------|-----------|--------|
-| `config/config.yaml` | user | `token: <yandex OAuth>`, optional `ytmusic_download_dir: <path>` (YT output root, relative to repo root, default `downloads`; flat; gitignored) |
+| `config/config.yaml` | user | `token: <yandex OAuth>`, optional `ytmusic_download_dir: <path>` (YT output root, relative to repo root, default `downloads`) and optional `buildin.mcp_url`; flat; gitignored |
 | `config/ex_config.yaml` | repo | template for the above |
 | `config/browser.json` | `ytmusicapi browser --file config/browser.json` | ytmusicapi headers-auth file (live cookies; sensitive) |
+| `config/buildin_tokens.json` | Buildin menu 1 | OAuth token set: `{access_token, refresh_token, token_type, scope, expires_in, expires_at, client_id, client_secret?, redirect_uri, resource, token_endpoint}`; mode 0600; gitignored |
 | `data/playlists_map.yaml` | YT menu 5 / user | `Title: {id: PLxxxx, artists: [..]}` |
 | `data/playlists_map_updated.yaml` | YT menu 5 | same schema; staging copy produced by the update command |
 | `data/yamusic.yaml` | Ya menu 4 / user | `Title: {kind: 1084, artists: [..]}` |
@@ -150,6 +182,7 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 - **Yandex Music** (`yandex-music` 2.2.0): OAuth token; direct connection (no proxy); used for likes, playlists, downloads.
 - **YouTube Music** (`ytmusicapi` 1.11.5): browser-cookie auth via `config/browser.json`; requests routed through SOCKS5 `127.0.0.1:1080`.
 - **yt-dlp** (2026.08.19, keep it current) + **ffmpeg**: download & MP3 transcode; same SOCKS5 proxy. Options are passed in code — the Python API does **not** read `~/.config/yt-dlp/config`. YouTube extraction additionally requires a JS runtime (`node` ≥20 or `deno`; default is `deno` only, the code enables both) plus the EJS solver script (`remote_components: ['ejs:github']`, fetched from GitHub once and then cached).
+- **Buildin.ai MCP** (`https://mcp.buildin.ai/message`): optional; direct HTTPS (no SOCKS5), OAuth 2.1 with dynamic client registration and PKCE, no API key. Only used when a Buildin command is invoked.
 
 ## Known issues / tech debt
 
@@ -159,7 +192,8 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 4. `config/config.yaml` holds a plaintext token; security depends entirely on `.gitignore`.
 5. `config/browser.json` with live cookie hashes was committed to git; it is now gitignored and untracked — the exposed cookies should still be rotated (see AGENTS.md Security).
 6. No tests, no CI, no non-interactive mode; verification is manual.
-7. Broad `try/except` around library calls hides error details (worst: bare `except` in src/yamusic.py:75). yt-dlp failures are an exception now: `download_track` logs the real reason via `YtdlpLogger` (src/ytmusic.py:38) and returns `None`.
+7. Broad `try/except` around library calls hides error details (worst: bare `except` in src/yamusic.py:76). yt-dlp failures are an exception now: `download_track` logs the real reason via `YtdlpLogger` (src/ytmusic.py:41) and returns `None`.
 8. `get_playlist_artists` (YT) assumes `track["artists"]` is present for every track; malformed entries raise.
 9. **yt-dlp must be kept current.** The old build (2026.3.17) failed every YouTube download with a 403 on the media request; updating yt-dlp (2026.08.19) fixed it. When downloads suddenly 403 again, update yt-dlp first. Note: the `download_track` opts (`js_runtimes`, `remote_components`) are required on modern yt-dlp for YouTube extraction.
 10. `make clean` removes `__pycache__` only; `downloads/` cleanup is manual.
+11. **Buildin integration is transport-only.** `BuildinClient` exposes generic `list_tools` / `call_tool`; no music-specific workflow (exporting maps, categorizing tracks, etc.) is wired yet. Adding one should go through the CLI Buildin helpers or a new module that composes both clients.

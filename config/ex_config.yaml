@@ -5,3 +5,8 @@ token: "your_yandex_token"
 # Where YouTube Music downloads go (absolute path, or relative to the repo root).
 # Yandex Music downloads ignore this and always use ./downloads.
 ytmusic_download_dir: downloads
+
+# Optional: Buildin.ai MCP integration. OAuth tokens are stored in
+# config/buildin_tokens.json (gitignored) after the first login.
+# buildin:
+#   mcp_url: https://mcp.buildin.ai/message

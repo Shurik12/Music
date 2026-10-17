@@ -25,7 +25,7 @@ uv run main.py [flags]         # or: make run
 
 `CLI.run()` (src/cli.py:174) loops:
 
-1. **Mode selection**: `1` YouTube Music, `2` Yandex Music, `q/quit/exit` to quit.
+1. **Mode selection**: `1` YouTube Music, `2` Yandex Music, `3` Buildin AI, `q/quit/exit` to quit.
 2. Inside a mode: type the command number (or alias). `help/?/empty` reprints the menu, `b/back` returns to mode selection, `q/quit/exit` quits.
 3. `Ctrl+C` quits gracefully; unexpected exceptions print `Error: ...` and return to the loop.
 
@@ -61,6 +61,27 @@ Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
 | 5 | `p` (note: not `changes`) | Remove broken liked tracks | src/cli.py:164 → `check_tracks` (src/yamusic.py:308) | **Destructive**: unlikes tracks that fail to fetch (per-track error print) |
 | 6 | `sync` | Sync playlists from `data/yamusic.yaml` | src/cli.py:166 → `sync_playlists_from_yaml` (src/yamusic.py:191) | **Destructive**: clears each playlist in the YAML, then refills from liked tracks by artist match; creates missing playlists; batches of 50 |
 
+## Buildin AI mode
+
+Handler: `CLI.handle_buildin_command` (src/cli.py:302). The client is
+`BuildinClient` (src/buildin.py:130); it speaks MCP Streamable HTTP and uses
+the OAuth metadata advertised by the MCP endpoint. Startup performs no Buildin
+network calls.
+
+| # | Aliases | Action | Implementation | Side effects / notes |
+|---|---------|--------|----------------|----------------------|
+| 1 | `login` | Authorize with Buildin | `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
+| 2 | `status` | Show auth state | `BuildinClient.status` (src/buildin.py:153) + `CLI.buildin_status` (src/cli.py:218) | Prints endpoint, token file, authorization state and expiry; no network |
+| 3 | `tools` | List MCP tools | `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
+| 4 | `call` | Call an MCP tool | `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
+| 5 | `logout` | Forget tokens | `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
+
+Transport details (src/buildin.py:435-556): `initialize` +
+`notifications/initialized`, `Mcp-Session-Id`/`MCP-Protocol-Version` headers,
+JSON and `text/event-stream` responses, one automatic token refresh on HTTP
+401, and one session re-initialization on HTTP 404. `BUILDIN_ACCESS_TOKEN`
+overrides the stored access token (useful for scripts/tests).
+
 ## Direct file outputs
 
 All paths are relative to the repository root (see `src/paths.py`).
@@ -74,6 +95,7 @@ All paths are relative to the repository root (see `src/paths.py`).
 | Ya 1 | `logs/tracks.json` (or `--output`) |
 | Ya 2/3 | `downloads/<Playlist>/*.mp3` |
 | Ya 4 | `data/temp_playlist_map.yaml` |
+| Buildin 1 | `config/buildin_tokens.json` |
 | every run | `logs/music_api_<timestamp>.log` |
 
 ## Makefile targets

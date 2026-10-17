@@ -11,8 +11,10 @@ from src import (
     get_logger,
     YaMusicHandle,
     YTMusicClient,
+    BuildinClient,
     CLI
 )
+from src.buildin import DEFAULT_MCP_URL
 from src import paths
 from pathlib import Path
 
@@ -57,10 +59,22 @@ def main() -> None:
         logger.info("Initializing YouTube Music client...")
         ytmusic = YTMusicClient(str(ytmusic_download_dir))
         
-        logger.info("Successfully initialized both clients")
+        logger.info("Successfully initialized music clients")
+        
+        # Buildin AI (MCP) client; no network access until a command needs it
+        buildin_config = config.get("buildin") or {}
+        if not isinstance(buildin_config, dict):
+            raise ValueError("config 'buildin' section must be a mapping")
+        buildin_url = buildin_config.get("mcp_url", DEFAULT_MCP_URL)
+        token_file = buildin_config.get("token_file")
+        buildin = BuildinClient(
+            mcp_url=buildin_url,
+            token_file=paths.resolve(token_file) if token_file else paths.BUILDIN_TOKENS_FILE,
+        )
+        logger.info(f"Buildin MCP endpoint: {buildin_url}")
         
         # Start CLI interface
-        cli = CLI(yamusic, ytmusic, args)
+        cli = CLI(yamusic, ytmusic, buildin, args)
         cli.run()
         
         logger.info("Transfer completed successfully")

@@ -28,6 +28,7 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 | `src/yamusic.py` | `YaMusicHandle`: liked-track export, playlist map generation, Yandex playlist sync/CRUD, Yandex downloads (uses `yandex_music` built-in downloader). |
 | `src/ytmusic.py` | `YTMusicClient`: `ytmusicapi` wrapper — search/like import, playlist CRUD, "tracks out of playlist" detection, yt-dlp MP3 downloads, per-playlist `track_map_*.yaml`. Also configures logging **at import time**. |
 | `src/track.py` | `Track` NamedTuple `(artist, name)` — the transfer currency between both clients. |
+| `src/buildin.py` | `BuildinClient`: self-contained Buildin.ai MCP client — OAuth 2.1 discovery + dynamic registration + PKCE + local browser callback, token refresh, MCP Streamable HTTP (`initialize`, `tools/list`, `tools/call`), JSON and SSE responses. No MCP SDK / new dependencies. Optional: no network at startup. |
 | `src/args.py` / `src/config.py` / `src/logger.py` | argparse definitions, YAML config loader, console+file logging setup. |
 
 Detailed module reference, data flows and file schemas: **docs/ARCHITECTURE.md**.
@@ -60,13 +61,16 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - **`config/config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads, relative to the repo root). `config/ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
 - **`src/yamusic.py:76`** has a bare `except` that swallows all errors in `get_playlist_artists` — be aware when debugging missing artists.
 - **Legacy fallback:** `config.yaml` / `browser.json` left in the repo root are still picked up (with a warning) by `paths.resolve_config()` / `paths.browser_auth_file()`. New code should use `config/` only.
+- **Buildin client is lazy and generic.** `BuildinClient` (src/buildin.py:130) makes no network calls until `login()` / `list_tools()` / `call_tool()`. `src/cli.py` only exposes login/status/list/call/logout; there is no music-specific Buildin workflow yet. OAuth requires a browser and a temporary `127.0.0.1` callback (5 min timeout). Tokens live in `config/buildin_tokens.json` (0600, gitignored). `BUILDIN_ACCESS_TOKEN` overrides the stored token for headless use/tests.
+- **MCP transport quirks:** responses may be `application/json` or `text/event-stream`; the client handles both. It refreshes once on HTTP 401 and re-initializes the session once on HTTP 404. If you add tool calls, keep those retries in mind.
 
 ## Security
 
 - `config/config.yaml` holds a live Yandex token and is gitignored. Never print it or copy it into docs/logs.
 - `config/browser.json` holds live YouTube auth cookies. It is now gitignored and untracked (previously committed — the cookies were exposed, rotate them). Do not paste its contents anywhere. Re-export procedure: README → *Re-exporting browser.json* — use DevTools **Copy as fetch (Node.js)**, not plain *Copy as fetch* (which drops the `Cookie` header).
+- `config/buildin_tokens.json` holds Buildin OAuth access/refresh tokens (0600, gitignored). Never print it or commit it; use Buildin menu `5` (Log out) to delete it.
 - Do not add real tokens/cookies to `config/ex_config.yaml` or any tracked file.
-- `downloads/`, `logs/`, `__pycache__/`, `.venv/`, `config/config.yaml` and `config/browser.json` are gitignored — don't force-add them.
+- `downloads/`, `logs/`, `__pycache__/`, `.venv/`, `config/config.yaml`, `config/browser.json` and `config/buildin_tokens.json` are gitignored — don't force-add them.
 
 ## Where to change what
 
@@ -77,6 +81,7 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 | New YouTube API / download action | `src/ytmusic.py` |
 | New CLI flag | `src/args.py`, then wire it in `main.py` (and actually pass it to clients — see proxy gotcha) |
 | New file / output location | `src/paths.py`, then reference the constant (never a bare relative path) |
+| New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/cli.py` Buildin helpers (src/cli.py:193-318) for the UI; compose with the music clients there |
 | Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:391) for YT, `sync_playlists_from_yaml` (src/yamusic.py:191) for Ya |
 
 ## Docs
