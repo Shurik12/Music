@@ -1,14 +1,15 @@
 import logging
 import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+from . import paths
 
 
 def setup_logging(log_level: str = "INFO", output_file: Optional[str] = None) -> None:
     """Setup logging to both console and file"""
     # Create logs directory if it doesn't exist
-    log_dir = Path("logs")
+    log_dir = paths.LOGS_DIR
     log_dir.mkdir(exist_ok=True)
     
     # Create log filename with timestamp

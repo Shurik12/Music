@@ -1,5 +1,5 @@
-# Copy this file to config.yaml and fill in your Yandex Music OAuth token.
-# config.yaml is gitignored — never commit real tokens.
+# Copy this file to config.yaml in the same `config/` folder and fill in your
+# Yandex Music OAuth token. config.yaml is gitignored — never commit real tokens.
 token: "your_yandex_token"
 
 # Where YouTube Music downloads go (absolute path, or relative to the repo root).

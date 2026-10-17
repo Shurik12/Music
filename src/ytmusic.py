@@ -9,8 +9,10 @@ import logging
 import yt_dlp
 from datetime import datetime
 
+from src import paths
+
 # Create logs directory if it doesn't exist
-logs_dir = Path("logs")
+logs_dir = paths.LOGS_DIR
 logs_dir.mkdir(exist_ok=True)
 
 # Configure logging to write to log folder
@@ -69,7 +71,7 @@ from src.track import Track
 class YTMusicClient:
     def __init__(
         self,
-        download_dir: str = "downloads",
+        download_dir: str = str(paths.DOWNLOAD_DIR),
     ):
         self.download_dir = download_dir
         session = requests.Session()
@@ -79,8 +81,9 @@ class YTMusicClient:
         }
         session.trust_env = False
 
+        self.auth_file = paths.browser_auth_file()
         self.ytmusic = YTMusic(
-            auth="browser.json",
+            auth=str(self.auth_file),
             requests_session=session,
         )
         self._check_auth()
@@ -91,19 +94,21 @@ class YTMusicClient:
             info = self.ytmusic.get_account_info()
         except KeyError:
             print(
-                "WARNING: YouTube Music authentication is expired or invalid (browser.json).\n"
+                "WARNING: YouTube Music authentication is expired or invalid "
+                f"({self.auth_file}).\n"
                 "         Library/playlist/liked-track methods will return empty results.\n"
                 "         Re-export it: log into https://music.youtube.com in a browser, copy a\n"
                 "         'browse' request's headers from DevTools, then run: ytmusicapi browser"
             )
             file_logger.warning(
-                "YouTube Music auth check failed: browser.json expired or invalid (logged-out response)"
+                f"YouTube Music auth check failed: {self.auth_file} expired or invalid "
+                "(logged-out response)"
             )
             return
         except Exception as e:
             print(
                 f"WARNING: Could not verify YouTube Music authentication ({type(e).__name__}: {e}).\n"
-                "         Check network/proxy (SOCKS5 127.0.0.1:1080) and browser.json."
+                f"         Check network/proxy (SOCKS5 127.0.0.1:1080) and {self.auth_file}."
             )
             file_logger.warning(f"YouTube Music auth check failed: {type(e).__name__}: {e}")
             return
@@ -368,7 +373,8 @@ class YTMusicClient:
 
     def print_tracks(self, tracks: List[Dict[str, Any]]):
         total_tracks = len(tracks)
-        with open("tracks.txt", "w") as fw:
+        tracks_file = paths.LOGS_DIR / "tracks.txt"
+        with open(tracks_file, "w", encoding="utf-8") as fw:
             for track in tqdm(
                 tracks,
                 desc="Writing tracks to file",
@@ -380,10 +386,10 @@ class YTMusicClient:
                     f"{track['artists'][0]['name']}\t{track['title']}\t{track['videoId']}\n"
                 )
 
-        print(f"Successfully wrote {total_tracks} tracks to tracks.txt")
+        print(f"Successfully wrote {total_tracks} tracks to {tracks_file}")
 
     def distribute_tracks(self):
-        with open("playlists_map.yaml", "r", encoding="utf-8") as f:
+        with open(paths.PLAYLISTS_MAP_FILE, "r", encoding="utf-8") as f:
             playlists_map = yaml.safe_load(f)
 
         track_out_playlist = self.get_track_out_playlist()
@@ -398,14 +404,16 @@ class YTMusicClient:
             if (len(add_tracks)):
                 self.add_playlist_items(playlist_info["id"], add_tracks)
     
-    def update_playlists_map(self, output_file: str = "playlists_map_updated.yaml"):
+    def update_playlists_map(self, output_file: Optional[str] = None):
         """
         Update playlists_map.yaml file with current playlists and their artists.
         Excludes playlists with IDs in ["LM", "SE"].
         
         Args:
             output_file: Path to save the updated playlists map
+                (default: data/playlists_map_updated.yaml)
         """
+        output_file = output_file or str(paths.DATA_DIR / "playlists_map_updated.yaml")
         print("Fetching playlists...")
         playlists = self.get_playlists()
         

@@ -5,6 +5,7 @@ from yandex_music.utils.difference import Difference
 from typing import List, Set
 
 from .track import Track
+from . import paths
 from tqdm import tqdm
 
 
@@ -81,7 +82,8 @@ class YaMusicHandle:
         for playlist in playlists:
             print (f"{playlist.title}: {playlist.kind}")
 
-    def playlist_map(self, output_file: str = "temp_playlist_map.yaml"):
+    def playlist_map(self, output_file: str | None = None):
+        output_file = output_file or str(paths.DATA_DIR / "temp_playlist_map.yaml")
         print("Fetching playlists...")
         playlists = self.client.users_playlists_list()
         
@@ -140,7 +142,7 @@ class YaMusicHandle:
 
     def download_tracks(self, tracks, name):
         chars_to_remove = ['/', '"', ':', "?", "*", "¿"]
-        folder = f"downloads/{name}"
+        folder = paths.DOWNLOAD_DIR / name
         os.makedirs(folder, exist_ok=True)
         existed_tracks = [f"{folder}/{f}" for f in os.listdir(folder)]
         for track in tqdm(tracks, desc="Downloading tracks"):
@@ -186,7 +188,7 @@ class YaMusicHandle:
             self.download_tracks(tracks, "Like")
 
 
-    def sync_playlists_from_yaml(self, yaml_file: str = "yamusic.yaml"):
+    def sync_playlists_from_yaml(self, yaml_file: str = str(paths.YAMUSIC_MAP_FILE)):
         """
         Read playlist configuration from YAML file, clear existing playlists,
         and populate them with liked tracks based on artist matching.

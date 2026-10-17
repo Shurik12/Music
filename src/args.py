@@ -10,7 +10,7 @@ def parse_args() -> argparse.Namespace:
         "--config", 
         type=str, 
         default="config.yaml", 
-        help="Path to config.yaml file"
+        help="Config file (default: config/config.yaml)"
     )
     parser.add_argument(
         "--output",

@@ -136,9 +136,9 @@ class CLI:
         elif command in ['4', 'print']:
             tracks = self.ytmusic.get_track_out_playlist()
             self.ytmusic.print_tracks(tracks)
-            print(f"Printed {len(tracks)} tracks to tracks.txt")
+            print(f"Printed {len(tracks)} tracks to logs/tracks.txt")
         elif command in ['5', 'playlist_map']:
-            self.ytmusic.update_playlists_map("1.yaml")
+            self.ytmusic.update_playlists_map()
         elif command in ['6', 'distribute']:
             self.ytmusic.distribute_tracks()
         elif command in ['7', 'download']:

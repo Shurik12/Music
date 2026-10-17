@@ -13,13 +13,14 @@ from src import (
     YTMusicClient,
     CLI
 )
+from src import paths
 from pathlib import Path
 
 
 def main() -> None:
-    # Create logs directory if it doesn't exist
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
+    # Create the directories the app writes to (all anchored to the repo root)
+    paths.ensure_directories()
+    logs_dir = paths.LOGS_DIR
     
     # Parse command line arguments
     args = parse_args()
@@ -38,13 +39,15 @@ def main() -> None:
         
         # Log configuration info
         logger.info("Starting Yandex.Music to YouTube Music transfer")
-        logger.info(f"Config file: {args.config}")
+        logger.info(f"Config file: {paths.resolve_config(args.config)}")
         logger.info(f"Output file: {args.output}")
         logger.info(f"Proxy enabled: {not args.no_proxy}")
         if not args.no_proxy:
             logger.info(f"Proxy port: {args.proxy_port}")
         
-        ytmusic_download_dir = config.get("ytmusic_download_dir", "downloads")
+        ytmusic_download_dir = paths.resolve(
+            config.get("ytmusic_download_dir", paths.DOWNLOAD_DIR)
+        )
         logger.info(f"YouTube Music download directory: {ytmusic_download_dir}")
         
         # Initialize clients
@@ -52,7 +55,7 @@ def main() -> None:
         yamusic = YaMusicHandle(config["token"])
         
         logger.info("Initializing YouTube Music client...")
-        ytmusic = YTMusicClient(ytmusic_download_dir)
+        ytmusic = YTMusicClient(str(ytmusic_download_dir))
         
         logger.info("Successfully initialized both clients")
         
