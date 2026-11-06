@@ -22,8 +22,8 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 
 | File | Role |
 |------|------|
-| `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config/config.yaml` → `config["token"]` + `ytmusic_download_dir` (default `downloads`, relative paths anchored to the repo root) → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. Relative `--output` is redirected into `logs/` (main.py:30). Also calls `paths.ensure_directories()`. |
-| `src/cli.py` | Interactive curses menu loop (`CLI`, src/cli.py:10). Full-screen arrow-key menu (`_select`, curses wrapper): mode select → YT/Ya/Buildin sub-menu → `_dispatch_*` → `_pause` (Press Enter to continue). ANSI colors via `src/color.py`. Contains hardcoded demo values (see Gotchas). |
+| `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config/config.yaml` → `config["token"]` + `ytmusic_download_dir` (default `downloads`, relative paths anchored to the repo root) → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. `--output` is always resolved via `paths.resolve()` (main.py:32). Also calls `paths.ensure_directories()`. |
+| `src/cli.py` | Interactive curses menu loop (`CLI`, src/cli.py:13). Full-screen arrow-key menu (`_select`, curses wrapper): mode select → YT/Ya/Buildin sub-menu → `_dispatch_*` → `_pause` (Press Enter to continue). ANSI colors via `src/color.py`. Contains hardcoded demo values (see Gotchas). |
 | `src/color.py` | Lightweight ANSI color helpers (no dependencies). Auto-disabled by `NO_COLOR=1` or `TERM=dumb`. Functions: `bold`, `cyan`, `green`, `yellow`, `red`, `blue`, `magenta`, `*_bold` variants. |
 | `src/paths.py` | Single source of truth for all filesystem paths (`PROJECT_ROOT`, `CONFIG_DIR`, `DATA_DIR`, `DOWNLOAD_DIR`, `LOGS_DIR`, config/auth/map files, `resolve*` helpers). Paths are anchored to the repo root, never to the CWD. |
 | `src/yamusic.py` | `YaMusicHandle`: liked-track export, playlist map generation, Yandex playlist sync/CRUD, Yandex downloads (uses `yandex_music` built-in downloader). |
@@ -44,8 +44,8 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
   - `data/playlists_map.yaml` (YouTube): `title → {id: <playlistId>, artists: [...]}`
   - `data/yamusic.yaml` (Yandex): `title → {kind: <numeric kind>, artists: [...]}`
 - All runtime paths come from `src/paths.py`; do not add bare relative filenames like `open("x.yaml")` — that reintroduces CWD-dependent behavior.
-- Special YouTube playlist IDs handled in code: `LM` = Liked Music, `SE` = excluded; both are skipped in distribution/download flows (src/ytmusic.py:347,351,425,612).
-- File names for YT downloads come from the yt-dlp template `%(artist)s - %(title)s.%(ext)s`; Yandex downloads sanitize `/ " : ? * ¿` from names (src/yamusic.py:145).
+- Special YouTube playlist IDs handled in code: `LM` = Liked Music, `SE` = excluded; both are skipped in distribution/download flows via `EXCLUDED_PLAYLIST_IDS` (src/ytmusic.py:20,345,349,423,607).
+- File names for YT downloads come from the yt-dlp template `%(artist)s - %(title)s.%(ext)s`; Yandex downloads sanitize `/ " : ? * ¿` from names (src/yamusic.py:146).
 - Type hints + short docstrings are used in `ytmusic.py`; `yamusic.py` is looser. Match the file you are editing; don't reformat unrelated code.
 
 ## Gotchas
@@ -53,18 +53,18 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - **Interactive only.** All flows use a curses menu (`_select`) + `input()` for confirmations; there is no non-interactive mode. Do not launch the CLI expecting pipeable output.
 - **Curses menu.** `src/cli.py` `_select` uses `curses.wrapper`; the terminal must be a real TTY (no pipes). Menu: ↑/↓ or j/k navigate, Enter select, q/esc back/quit, 1-N quick-pick.
 - **Colors.** All ANSI colors go through `src/color.py`; never use raw `\x1b[` sequences elsewhere. Set `NO_COLOR=1` to disable.
-- **Logging is file-only.** `setup_logging()` writes to `logs/music_api_<ts>.log`; nothing goes to stdout. yt-dlp logs go to `logs/download_log_<ts>.log` (import-time side effect of `src/ytmusic`).
-- **Import-time side effects.** `import src.ytmusic` creates `logs/` (at the repo root) and a `logs/download_log_<ts>.log` file immediately (src/ytmusic.py:14-37).
-- **Auth is checked at startup.** `YTMusicClient.__init__` runs `_check_auth()` (src/ytmusic.py:91) and warns — without aborting — when `config/browser.json` is expired (account endpoints then silently return logged-out/empty data) or cannot be verified (network/proxy down).
-- **yt-dlp failures are logged, not silent.** `download_track` (src/ytmusic.py:470) passes a custom `YtdlpLogger` (src/ytmusic.py:41) so yt-dlp errors/warnings land in `logs/download_log_<ts>.log`, and returns `None` when yt-dlp fails or the output file was not created. Its opts also set `js_runtimes` (node ≥20 or deno) and `remote_components: ['ejs:github']` — YouTube requires a JS runtime plus the EJS solver script (fetched from GitHub once, then cached).
+- **Logging is file-only.** `setup_logging()` writes to `logs/music_api_<ts>.log`; nothing goes to stdout. yt-dlp logs go to `logs/download_log_<ts>.log` (created per `YTMusicClient` instance).
+- **Download log is created per client, not at import time.** `YTMusicClient.__init__` calls `_setup_download_logger()` which creates `logs/download_log_<ts>.log` on first construction (src/ytmusic.py:72-83). Importing the module alone has no side effects.
+- **Auth is checked at startup.** `YTMusicClient.__init__` runs `_check_auth()` (src/ytmusic.py:89) and warns — without aborting — when `config/browser.json` is expired (account endpoints then silently return logged-out/empty data) or cannot be verified (network/proxy down).
+- **yt-dlp failures are logged, not silent.** `download_track` (src/ytmusic.py:467) passes a custom `YtdlpLogger` (src/ytmusic.py:27) so yt-dlp errors/warnings land in `logs/download_log_<ts>.log`, and returns `None` when yt-dlp fails or the output file was not created. Its opts also set `js_runtimes` (node ≥20 or deno) and `remote_components: ['ejs:github']` — YouTube requires a JS runtime plus the EJS solver script (fetched from GitHub once, then cached).
 - **Hardcoded demo values in `cli.py`** — change these when touching those commands:
-  - YT command 2 uses `playlists[1]` (src/cli.py:68)
-  - YT command 8 downloads video `9zhK-QaEYZY` (src/cli.py:147)
+  - YT command 2 uses `playlists[1]` (src/cli.py:138)
+  - YT command 8 downloads video `9zhK-QaEYZY` (src/cli.py:441)
 - **Proxy is hardcoded** to `socks5://127.0.0.1:1080` in two places in `src/ytmusic.py` (API session ~line 78, yt-dlp opts ~line 509). `--no-proxy`/`--proxy-port` are parsed and logged but never wired; `--log-file` is parsed and unused.
 - **Destructive commands exist.** Yandex menu 5 removes broken liked tracks; menu 6 clears each `data/yamusic.yaml` playlist before repopulating. Never trigger these in a test/demo without explicit user consent.
-- **Transfer reverses order** before importing (src/cli.py:85) to mirror Yandex like chronology.
-- **`config/config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads, relative to the repo root). `config/ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
-- **`src/yamusic.py:76`** has a bare `except` that swallows all errors in `get_playlist_artists` — be aware when debugging missing artists.
+- **Transfer reverses order** before importing (src/cli.py:155) to mirror Yandex like chronology.
+- **`config/config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads, relative to the repo root, optional `buildin:` mapping with `mcp_url` and `token_file`). `config/ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
+- **`src/yamusic.py:76`** — `get_playlist_artists` catches `Exception` and prints a warning; the failure is logged but the function still returns an empty set.
 - **Legacy fallback:** `config.yaml` / `browser.json` left in the repo root are still picked up (with a warning) by `paths.resolve_config()` / `paths.browser_auth_file()`. New code should use `config/` only.
 - **Buildin client is lazy and generic.** `BuildinClient` (src/buildin.py:130) makes no network calls until `login()` / `list_tools()` / `call_tool()`. `src/cli.py` exposes login/status/list/call/logout plus the playlist-map sync; deeper music workflows go in a new module that composes both clients. OAuth requires a browser and a temporary `127.0.0.1` callback (5 min timeout). Tokens live in `config/buildin_tokens.json` (0600, gitignored). `BUILDIN_ACCESS_TOKEN` overrides the stored token for headless use/tests.
 - **Buildin map sync is source-of-truth by database.** `src/buildin_maps.py` stores one record per playlist in the `Music Library → Playlists` database (`Title`, `Platform`, `External ID`, `Artists` newline-separated). Property names are matched exactly — renaming `Platform`/`External ID`/`Artists` breaks import. Buildin has no record-deletion tool: locally removed playlists stay as orphans and must be deleted in the UI, otherwise they reappear on import. Import keeps a platform's YAML file when Buildin has zero records for it. IDs cache: `config/buildin_music.json` (delete to rediscover).
@@ -88,9 +88,9 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 | New YouTube API / download action | `src/ytmusic.py` |
 | New CLI flag | `src/args.py`, then wire it in `main.py` (and actually pass it to clients — see proxy gotcha) |
 | New file / output location | `src/paths.py`, then reference the constant (never a bare relative path) |
-| New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli.py` Buildin helpers (src/cli.py:193-387) for the UI |
+| New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli.py` Buildin helpers (src/cli.py:197-387) for the UI |
 | Change Buildin map fields/format | `src/buildin_maps.py` (`_record_properties`, `_records_to_maps`, `_parse_artists`) + README database-schema section |
-| Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:391) for YT, `sync_playlists_from_yaml` (src/yamusic.py:191) for Ya |
+| Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:389) for YT, `sync_playlists_from_yaml` (src/yamusic.py:193) for Ya |
 
 ## OpenCode agents & commands
 

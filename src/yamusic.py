@@ -1,6 +1,6 @@
 import os
 import yaml
-from yandex_music import Client, Artist, Playlist
+from yandex_music import Client, Playlist
 from yandex_music.utils.difference import Difference
 from typing import List, Set
 
@@ -67,14 +67,14 @@ class YaMusicHandle:
             return []
         
     def get_playlist_artists(self, playlist: Playlist) -> Set[str]:
-        artists = set()
+        artists: Set[str] = set()
         try:
             tracks = playlist.fetch_tracks()
             for track in tracks:
                 for artist in track.track.artists:
                     artists.add(artist.name)
-        except:
-            artists = set()
+        except Exception as e:
+            print(f"  Warning: could not fetch artists: {e}")
         return artists
         
     def print_playlists(self):
@@ -98,10 +98,10 @@ class YaMusicHandle:
         for playlist in tqdm(playlists, desc="Processing playlists"):
             
             artists = self.get_playlist_artists(playlist)
-            key = playlist["title"].replace(":", " -")  # Avoid YAML key issues with colons
-            
+            key = playlist.title.replace(":", " -")  # Avoid YAML key issues with colons
+
             playlists_map[key] = {
-                "kind": playlist["kind"],
+                "kind": playlist.kind,
                 "artists": sorted(list(artists))
             }
         
@@ -112,11 +112,13 @@ class YaMusicHandle:
         print(f"Total playlists in map: {len(playlists_map)}")
 
     def create_playlist(self):
+        # DEMO: not wired to CLI
         playlist = self.client.users_playlists_create("Test")
         print(f'{playlist.title}: {playlist.kind}')
         return playlist.kind
 
     def add_tracks_to_playlist(self, kind):
+        # DEMO: not wired to CLI
         playlist = self.client.users_playlists(kind)
         like_tracks = self.client.users_likes_tracks().tracks[15:25]
         tracks = []

@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime
+from typing import Optional
 
 from . import color
 from .yamusic import YaMusicHandle
@@ -8,20 +9,51 @@ from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
 from .buildin_maps import MapSyncError, export_maps, import_maps, write_imported_maps
 
+
 class CLI:
-    def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient, buildin: BuildinClient, args):
+    # Menu items — labels only, order = selection index
+    YT_MENU = [
+        "List playlists",
+        "Playlist artists",
+        "Tracks out of playlist",
+        "Print tracks to file",
+        "Update playlist map",
+        "Distribute tracks",
+        "Download all playlists",
+        "Download track (demo)",
+    ]
+    YA_MENU = [
+        "Transfer to YouTube Music",
+        "Download playlists",
+        "Download liked tracks",
+        "Get playlist map",
+        "Remove broken liked tracks (destructive)",
+        "Sync playlists from YAML (destructive)",
+    ]
+    BUILDIN_MENU = [
+        "Log in",
+        "Status",
+        "List MCP tools",
+        "Call MCP tool",
+        "Log out",
+        "Export maps",
+        "Import maps",
+    ]
+
+    def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient,
+                 buildin: BuildinClient, args) -> None:
         self.yamusic = yamusic
         self.ytmusic = ytmusic
         self.buildin = buildin
         self.args = args
         self.running = True
-        self.mode = None  # 'ytmusic', 'yamusic' or 'buildin'
-        
+        self.mode: Optional[str] = None  # 'ytmusic', 'yamusic' or 'buildin'
+
     @staticmethod
     def _select(title: str, items: list[str],
                back_label: str = "Back") -> int:
         """Interactive curses menu. Returns 0-based index, or -1 for back/quit."""
-        import curses
+        import curses  # lazy: curses is only needed when the menu actually runs
 
         footer = [f"{back_label}  ·  q / esc to {back_label.lower()}",
                   "↑/↓ move  ·  enter select  ·  1-N quick pick"]
@@ -84,14 +116,11 @@ class CLI:
                     if idx < n:
                         selected[0] = idx
                         break
-                elif key == 48 and n >= 10:  # '0'
-                    selected[0] = 0
-                    break
             return selected[0]
 
         return curses.wrapper(_run)
     
-    def list_playlists(self):
+    def list_playlists(self) -> None:
         """List all playlists"""
         try:
             playlists = self.ytmusic.get_playlists()
@@ -100,10 +129,12 @@ class CLI:
         except Exception as e:
             print(color.red(f"Error listing playlists: {e}"))
     
-    def get_playlist_artists(self):
+    def get_playlist_artists(self) -> None:
         """Get artists from a specific playlist"""
+        if len(playlists := self.ytmusic.get_playlists()) < 2:
+            print(color.red("Need at least 2 playlists to pick from."))
+            return
         try:
-            playlists = self.ytmusic.get_playlists()
             playlist = self.ytmusic.get_playlist(playlists[1]["playlistId"])
             artists = self.ytmusic.get_playlist_artists(playlist)
             print(color.cyan_bold(playlist["title"]))
@@ -155,7 +186,7 @@ class CLI:
         with open(out_path, 'w', encoding='utf-8') as f:
             f.write(str_data)
     
-    def transfer_tracks(self):
+    def transfer_tracks(self) -> None:
         """Transfer tracks from Yandex Music to YouTube Music"""
         confirm = input("\nThis will transfer liked tracks from Yandex Music to YouTube Music. Continue? (y/n): ")
         if confirm.lower() in ['y', 'yes']:
@@ -188,7 +219,7 @@ class CLI:
             print(color.green("Logged in to Buildin MCP."))
         return True
     
-    def buildin_status(self):
+    def buildin_status(self) -> None:
         status = self.buildin.status()
         print(f"  MCP endpoint: {color.cyan(status['mcp_url'])}")
         print(f"  Token file:   {status['token_file']}")
@@ -205,7 +236,7 @@ class CLI:
         else:
             print(f"  Status:       {color.green('authorized')}")
     
-    def buildin_tools(self):
+    def buildin_tools(self) -> None:
         if not self.buildin_ensure_login():
             return
         try:
@@ -227,7 +258,7 @@ class CLI:
             else:
                 print(f"  {name}")
     
-    def buildin_call_tool(self):
+    def buildin_call_tool(self) -> None:
         if not self.buildin_ensure_login():
             return
         
@@ -254,7 +285,7 @@ class CLI:
 
         self.print_tool_result(result)
     
-    def print_tool_result(self, result):
+    def print_tool_result(self, result: dict) -> None:
         content = result.get("content") if isinstance(result, dict) else None
         if isinstance(content, list):
             for item in content:
@@ -268,11 +299,11 @@ class CLI:
         if isinstance(result, dict) and result.get("isError"):
             print("(the tool reported an error)")
     
-    def buildin_logout(self):
+    def buildin_logout(self) -> None:
         self.buildin.logout()
         print(color.green("Buildin tokens removed."))
     
-    def buildin_export_maps(self):
+    def buildin_export_maps(self) -> None:
         if not self.buildin_ensure_login():
             return
         print(color.cyan("Exporting local playlist maps to Buildin..."))
@@ -294,7 +325,7 @@ class CLI:
             for platform, title in result["orphaned"]:
                 print(f"  {color.yellow(platform)}: {title}")
     
-    def buildin_import_maps(self):
+    def buildin_import_maps(self) -> None:
         if not self.buildin_ensure_login():
             return
         print(color.cyan("Reading playlist maps from Buildin..."))
@@ -343,36 +374,8 @@ class CLI:
         for path in written:
             print(f"  {path}  (backup: {path}.bak)")
     
-    # Menu items — labels only, order = selection index
-    YT_MENU = [
-        "List playlists",
-        "Playlist artists",
-        "Tracks out of playlist",
-        "Print tracks to file",
-        "Update playlist map",
-        "Distribute tracks",
-        "Download all playlists",
-        "Download track",
-    ]
-    YA_MENU = [
-        "Transfer to YouTube Music",
-        "Download playlists",
-        "Download liked tracks",
-        "Get playlist map",
-        "Remove broken liked tracks",
-        "Sync playlists from YAML",
-    ]
-    BUILDIN_MENU = [
-        "Log in",
-        "Status",
-        "List MCP tools",
-        "Call MCP tool",
-        "Log out",
-        "Export maps",
-        "Import maps",
-    ]
 
-    def run(self):
+    def run(self) -> None:
         """Main CLI loop"""
         print(color.cyan_bold("  Music Library CLI"))
 
@@ -417,7 +420,7 @@ class CLI:
                 print("\n\n" + color.cyan("Goodbye!"))
                 self.running = False
             except Exception as e:
-                print(color.red(f"\nError: {e}\n"))
+                print(color.red(f"\nError: {e}"))
 
     @staticmethod
     def _pause() -> None:
@@ -425,7 +428,8 @@ class CLI:
         print()
         input(color.yellow("Press Enter to continue..."))
 
-    def _dispatch_yt(self, idx: int):
+    def _dispatch_yt(self, idx: int) -> None:
+        assert 0 <= idx < len(self.YT_MENU), f"Invalid YT menu index: {idx}"
         cmds = [
             self.list_playlists,
             self.get_playlist_artists,
@@ -439,7 +443,8 @@ class CLI:
         cmds[idx]()
         self._pause()
 
-    def _dispatch_ya(self, idx: int):
+    def _dispatch_ya(self, idx: int) -> None:
+        assert 0 <= idx < len(self.YA_MENU), f"Invalid YA menu index: {idx}"
         cmds = [
             self.transfer_tracks,
             self.yamusic.download_playlists,
@@ -451,7 +456,8 @@ class CLI:
         cmds[idx]()
         self._pause()
 
-    def _dispatch_buildin(self, idx: int):
+    def _dispatch_buildin(self, idx: int) -> None:
+        assert 0 <= idx < len(self.BUILDIN_MENU), f"Invalid Buildin menu index: {idx}"
         cmds = [
             self.buildin_login,
             self.buildin_status,

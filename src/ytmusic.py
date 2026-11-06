@@ -1,40 +1,26 @@
-import requests
-from tqdm import tqdm
-from ytmusicapi import YTMusic
-from typing import List, Dict, Any, Optional, Set, Union, Tuple
-import yaml
-from pathlib import Path
 import os
 import logging
-import yt_dlp
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
 
-from src import paths
+import requests
+import yaml
+import yt_dlp
+from tqdm import tqdm
+from ytmusicapi import YTMusic
 
-# Create logs directory if it doesn't exist
-logs_dir = paths.LOGS_DIR
-logs_dir.mkdir(exist_ok=True)
+from . import paths
+from .track import Track
 
-# Configure logging to write to log folder
-log_filename = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-file_handler = logging.FileHandler(log_filename)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+# Special YouTube playlist IDs handled in code; both are skipped in
+# distribution/download flows.
+EXCLUDED_PLAYLIST_IDS = frozenset({"LM", "SE"})
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)  # Only show warnings and errors in console
-console_handler.setFormatter(logging.Formatter('%(message)s'))
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-# Create a separate logger for file-only logs
+# Module-level loggers (handlers attached in YTMusicClient.__init__ via _setup_download_logger)
 file_logger = logging.getLogger(f"{__name__}.file")
-file_logger.setLevel(logging.INFO)
-file_logger.addHandler(file_handler)
-file_logger.propagate = False  # Don't send to console
+file_logger.propagate = False
 
 
 class YtdlpLogger:
@@ -65,14 +51,12 @@ class YtdlpLogger:
         file_logger.error(f"yt-dlp: {msg}")
 
 
-from src.track import Track
-
-
 class YTMusicClient:
     def __init__(
         self,
         download_dir: str = str(paths.DOWNLOAD_DIR),
     ):
+        self._setup_download_logger()
         self.download_dir = download_dir
         session = requests.Session()
         session.proxies = {
@@ -87,6 +71,18 @@ class YTMusicClient:
             requests_session=session,
         )
         self._check_auth()
+
+    def _setup_download_logger(self) -> None:
+        """Create the per-run download log file and attach it to file_logger."""
+        logs_dir = paths.LOGS_DIR
+        logs_dir.mkdir(exist_ok=True)
+        self.log_filename: Path = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        file_handler = logging.FileHandler(self.log_filename, encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        # Avoid double-attaching if the client is constructed more than once
+        file_logger.handlers.clear()
+        file_logger.addHandler(file_handler)
 
     def _check_auth(self) -> None:
         """Probe the account endpoint; expired browser.json silently returns logged-out data."""
@@ -188,7 +184,7 @@ class YTMusicClient:
 
     def print_playlists(self, playlists: List[Dict[str, Any]]):
         for playlist in playlists:
-            print(f"{playlist["title"]}: {playlist["playlistId"]}")
+            print(f"{playlist['title']}: {playlist['playlistId']}")
 
     def create_playlist(
         self,
@@ -344,11 +340,11 @@ class YTMusicClient:
             unit="playlists",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
         ):
-            if playlist_metadata["playlistId"] == "SE":
+            if playlist_metadata["playlistId"] in EXCLUDED_PLAYLIST_IDS:
                 continue
             else:
                 playlist = self.get_playlist(playlist_metadata["playlistId"])
-                if playlist["id"] == "LM":
+                if playlist["id"] in EXCLUDED_PLAYLIST_IDS:
                     like_playlist = playlist
                 else:
                     skip_track_videoId.update(
@@ -422,8 +418,7 @@ class YTMusicClient:
             return
         
         # Filter out excluded playlists
-        excluded_ids = ["LM", "SE"]
-        filtered_playlists = [ p for p in playlists if p.get("playlistId") not in excluded_ids ]
+        filtered_playlists = [p for p in playlists if p.get("playlistId") not in EXCLUDED_PLAYLIST_IDS]
         
         print(f"Found {len(filtered_playlists)} playlists (excluding LM and SE)")
         
@@ -480,9 +475,7 @@ class YTMusicClient:
         Download a single track from YouTube using yt-dlp.
         """
         output_path = output_path or self.download_dir
-        import sys
-        from contextlib import contextmanager
-        
+
         @contextmanager
         def suppress_output():
             """Context manager to suppress stdout and stderr"""
@@ -609,8 +602,7 @@ class YTMusicClient:
             return {}
         
         # Filter out excluded playlists
-        excluded_ids = ["LM", "SE"]
-        playlists = [p for p in playlists if p.get("playlistId") not in excluded_ids]
+        playlists = [p for p in playlists if p.get("playlistId") not in EXCLUDED_PLAYLIST_IDS]
         
         print(f"Found {len(playlists)} playlists")
         file_logger.info(f"Found {len(playlists)} playlists to download")
@@ -884,8 +876,8 @@ class YTMusicClient:
         file_logger.info(f"  Total skipped: {total_skipped}")
         file_logger.info(f"  Total failed: {total_failed}")
         file_logger.info("="*50)
-        file_logger.info(f"Log file saved to: {log_filename}")
+        file_logger.info(f"Log file saved to: {self.log_filename}")
         
-        print(f"\n✓ Detailed log saved to: {log_filename}")
+        print(f"\n✓ Detailed log saved to: {self.log_filename}")
         
         return download_stats

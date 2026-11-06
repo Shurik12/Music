@@ -15,8 +15,11 @@ may still keep them in the repository root, so :func:`resolve_config` and
 :func:`browser_auth_file` fall back to those legacy locations with a warning.
 """
 
+import logging
 from pathlib import Path
 from typing import Union
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,9 +62,10 @@ def _with_legacy(primary: Path, legacy_name: str) -> Path:
         return primary
     legacy = PROJECT_ROOT / legacy_name
     if legacy.exists():
-        print(
-            f"WARNING: using legacy {legacy_name} in the repository root; "
-            f"move it to {primary.relative_to(PROJECT_ROOT)}"
+        logger.warning(
+            "using legacy %s in the repository root; "
+            "move it to %s",
+            legacy_name, primary.relative_to(PROJECT_ROOT),
         )
         return legacy
     return primary
