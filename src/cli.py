@@ -16,64 +16,64 @@ class CLI:
         self.running = True
         self.mode = None  # 'ytmusic', 'yamusic' or 'buildin'
         
+    @staticmethod
+    def _print_menu(title: str, items: list[tuple[str, str]],
+                    extra: list[str] | None = None) -> None:
+        """Render a numbered menu with aligned labels.
+
+        items: list of (key, label) pairs.
+        extra: optional footer lines (e.g. "b, back - Return to mode selection").
+        """
+        width = max(len(label) for _, label in items) + 2
+        print(f"\n{title}")
+        print("-" * 40)
+        for key, label in items:
+            print(f"  {key}. {label.ljust(width)}")
+        if extra:
+            print("-" * 40)
+            for line in extra:
+                print(f"  {line}")
+        print("-" * 40)
+
     def print_mode_selection(self):
-        """Display mode selection menu"""
-        print("\n" + "="*50)
-        print("Select API Mode")
-        print("="*50)
-        print("1. YouTube Music")
-        print("2. Yandex Music")
-        print("3. Buildin AI")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
+        self._print_menu("Select API Mode", [
+            ("1", "YouTube Music"),
+            ("2", "Yandex Music"),
+            ("3", "Buildin AI"),
+        ], extra=["q / quit / exit - Exit program"])
+
     def print_ytmusic_menu(self):
-        """Display YouTube Music specific menu"""
-        print("\n" + "="*50)
-        print("YouTube Music Commands")
-        print("="*50)
-        print("1. List playlists")
-        print("2. Get playlist artists")
-        print("3. Get tracks from liked playlist")
-        print("4. Print tracks to file")
-        print("5. Update playlist map")
-        print("6. Distribute tracks by playlists")
-        print("7. Download all user playlists")
-        print("8. Download track")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
+        self._print_menu("YouTube Music Commands", [
+            ("1", "List playlists"),
+            ("2", "Playlist artists"),
+            ("3", "Tracks out of playlist"),
+            ("4", "Print tracks to file"),
+            ("5", "Update playlist map"),
+            ("6", "Distribute tracks"),
+            ("7", "Download all playlists"),
+            ("8", "Download track"),
+        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
+
     def print_yamusic_menu(self):
-        """Display Yandex Music specific menu"""
-        print("\n" + "="*50)
-        print("Yandex Music Commands")
-        print("="*50)
-        print("1. Transfer tracks to YouTube Music")
-        print("2. Download playlists")
-        print("3. Download liked tracks as playlist")
-        print("4. Get playlist map")
-        print("5. Playlist changes")
-        print("6. Sync playlists from yaml")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
+        self._print_menu("Yandex Music Commands", [
+            ("1", "Transfer to YouTube Music"),
+            ("2", "Download playlists"),
+            ("3", "Download liked tracks"),
+            ("4", "Get playlist map"),
+            ("5", "Remove broken liked tracks"),
+            ("6", "Sync playlists from YAML"),
+        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
+
     def print_buildin_menu(self):
-        """Display Buildin AI specific menu"""
-        print("\n" + "="*50)
-        print("Buildin AI Commands")
-        print("="*50)
-        print("1. Log in (browser OAuth)")
-        print("2. Show status")
-        print("3. List MCP tools")
-        print("4. Call MCP tool")
-        print("5. Log out")
-        print("6. Export playlist maps to Buildin")
-        print("7. Import playlist maps from Buildin")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
+        self._print_menu("Buildin AI Commands", [
+            ("1", "Log in"),
+            ("2", "Status"),
+            ("3", "List MCP tools"),
+            ("4", "Call MCP tool"),
+            ("5", "Log out"),
+            ("6", "Export maps"),
+            ("7", "Import maps"),
+        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
     
     def list_playlists(self):
         """List all playlists"""
@@ -391,10 +391,9 @@ class CLI:
     
     def run(self):
         """Main CLI loop"""
-        print("\n" + "="*50)
-        print("YouTube Music / Yandex Music / Buildin AI CLI")
-        print("="*50)
-        
+        print("Music Library CLI")
+        print("Music Library CLI".center(40, "-"))
+
         while self.running:
             try:
                 # Mode selection
