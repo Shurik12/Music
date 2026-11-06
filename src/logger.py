@@ -23,9 +23,9 @@ def setup_logging(log_level: str = "INFO", output_file: Optional[str] = None) ->
     file_handler.setFormatter(file_format)
     logger.addHandler(file_handler)
 
-    logging.info(f"Logging initialized. Log file: {log_file}")
+    logger.info("Logging initialized. Log file: %s", log_file)
     if output_file:
-        logging.info(f"Output file for results: {output_file}")
+        logger.info("Output file for results: %s", output_file)
     
     
 def get_logger(name: str) -> logging.Logger:
