@@ -15,6 +15,10 @@ from ytmusicapi import YTMusic
 from . import paths
 from .track import Track
 
+# Special YouTube playlist IDs handled in code; both are skipped in
+# distribution/download flows.
+EXCLUDED_PLAYLIST_IDS = frozenset({"LM", "SE"})
+
 # Module-level loggers (handlers attached in YTMusicClient.__init__ via _setup_download_logger)
 file_logger = logging.getLogger(f"{__name__}.file")
 file_logger.propagate = False
@@ -182,7 +186,7 @@ class YTMusicClient:
 
     def print_playlists(self, playlists: List[Dict[str, Any]]):
         for playlist in playlists:
-            print(f"{playlist["title"]}: {playlist["playlistId"]}")
+            print(f"{playlist['title']}: {playlist['playlistId']}")
 
     def create_playlist(
         self,
@@ -338,11 +342,11 @@ class YTMusicClient:
             unit="playlists",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
         ):
-            if playlist_metadata["playlistId"] == "SE":
+            if playlist_metadata["playlistId"] in EXCLUDED_PLAYLIST_IDS:
                 continue
             else:
                 playlist = self.get_playlist(playlist_metadata["playlistId"])
-                if playlist["id"] == "LM":
+                if playlist["id"] in EXCLUDED_PLAYLIST_IDS:
                     like_playlist = playlist
                 else:
                     skip_track_videoId.update(
@@ -416,8 +420,7 @@ class YTMusicClient:
             return
         
         # Filter out excluded playlists
-        excluded_ids = ["LM", "SE"]
-        filtered_playlists = [ p for p in playlists if p.get("playlistId") not in excluded_ids ]
+        filtered_playlists = [p for p in playlists if p.get("playlistId") not in EXCLUDED_PLAYLIST_IDS]
         
         print(f"Found {len(filtered_playlists)} playlists (excluding LM and SE)")
         
@@ -601,8 +604,7 @@ class YTMusicClient:
             return {}
         
         # Filter out excluded playlists
-        excluded_ids = ["LM", "SE"]
-        playlists = [p for p in playlists if p.get("playlistId") not in excluded_ids]
+        playlists = [p for p in playlists if p.get("playlistId") not in EXCLUDED_PLAYLIST_IDS]
         
         print(f"Found {len(playlists)} playlists")
         file_logger.info(f"Found {len(playlists)} playlists to download")
