@@ -1,5 +1,4 @@
 import os
-import sys
 import logging
 from contextlib import contextmanager
 from datetime import datetime
@@ -77,9 +76,8 @@ class YTMusicClient:
         """Create the per-run download log file and attach it to file_logger."""
         logs_dir = paths.LOGS_DIR
         logs_dir.mkdir(exist_ok=True)
-        global log_filename
-        log_filename = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        file_handler = logging.FileHandler(log_filename, encoding="utf-8")
+        self.log_filename: Path = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        file_handler = logging.FileHandler(self.log_filename, encoding="utf-8")
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         # Avoid double-attaching if the client is constructed more than once
@@ -878,8 +876,8 @@ class YTMusicClient:
         file_logger.info(f"  Total skipped: {total_skipped}")
         file_logger.info(f"  Total failed: {total_failed}")
         file_logger.info("="*50)
-        file_logger.info(f"Log file saved to: {log_filename}")
+        file_logger.info(f"Log file saved to: {self.log_filename}")
         
-        print(f"\n✓ Detailed log saved to: {log_filename}")
+        print(f"\n✓ Detailed log saved to: {self.log_filename}")
         
         return download_stats
