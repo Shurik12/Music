@@ -404,6 +404,12 @@ class CLI:
             except Exception as e:
                 print(f"\nError: {e}\n")
 
+    @staticmethod
+    def _pause() -> None:
+        """Wait for Enter / space / any key before returning to the menu."""
+        print()
+        input("Press Enter to continue...")
+
     def _dispatch_yt(self, idx: int):
         cmds = [
             self.list_playlists,
@@ -416,6 +422,7 @@ class CLI:
             lambda: self.ytmusic.download_track("9zhK-QaEYZY"),
         ]
         cmds[idx]()
+        self._pause()
 
     def _dispatch_ya(self, idx: int):
         cmds = [
@@ -427,6 +434,7 @@ class CLI:
             self.yamusic.sync_playlists_from_yaml,
         ]
         cmds[idx]()
+        self._pause()
 
     def _dispatch_buildin(self, idx: int):
         cmds = [
@@ -439,3 +447,4 @@ class CLI:
             self.buildin_import_maps,
         ]
         cmds[idx]()
+        self._pause()
