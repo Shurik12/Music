@@ -13,10 +13,12 @@ main.py
   │                                     ──►  YouTube downloads (yt-dlp, SOCKS5)
   ├── BuildinClient   (src/buildin.py)  ──►  Buildin MCP (OAuth 2.1 + Streamable HTTP)
   │
-  └── CLI             (src/cli.py)      interactive loop, dispatches to both clients
+  └── CLI             (src/cli.py)      curses menu loop, dispatches to both clients
+                                          └── src/color.py  (ANSI color helpers)
 ```
 
 Shared types: `Track` (src/track.py) — `NamedTuple(artist: str, name: str)`.
+UI colors: `src/color.py` — lightweight ANSI helpers, auto-disabled by `NO_COLOR=1` or `TERM=dumb`.
 
 All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the parent of `src/`), so relative paths never depend on the current working directory:
 
@@ -38,7 +40,7 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 1. `main.py:22` calls `paths.ensure_directories()` → creates `config/`, `data/`, `downloads/`, `logs/` at the repo root.
 2. `parse_args()` (src/args.py:4) — see flags in COMMANDS.md.
 3. Relative `--output` is rebased into `logs/` (main.py:30-31).
-4. `setup_logging()` (src/logger.py:9) — root logger → console (stdout) + `logs/music_api_<ts>.log`.
+4. `setup_logging()` (src/logger.py:9) — root logger → **file only** `logs/music_api_<ts>.log` (no console output).
 5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py:57` uses `config["token"]`.
 6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
 7. `YTMusicClient()` (src/ytmusic.py:72) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:91), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable.
@@ -95,7 +97,26 @@ Wraps `ytmusicapi.YTMusic` plus yt-dlp. **Module import has side effects**: conf
 
 ### src/cli.py — `CLI`
 
-Keeper of `self.mode` (`None` / `'ytmusic'` / `'yamusic'` / `'buildin'`), the three menus and dispatch. `move_tracks()` (line 95) implements the transfer flow and JSON report; everything else is thin glue. Buildin helpers live at src/cli.py:193-318. Contains hardcoded demo values — see Gotchas in AGENTS.md.
+Interactive curses menu loop. `self.mode` is `None` / `'ytmusic'` / `'yamusic'` / `'buildin'`.
+
+- **`_select(title, items, back_label)`** — full-screen curses menu (`curses.wrapper`): ↑/↓ or j/k navigate, Enter selects, q/esc goes back or quits, 1-N quick-pick. Returns the 0-based index or `-1` for back/quit. Color pairs: cyan title, white rules, green reverse-video selection, yellow footer.
+- **`YT_MENU` / `YA_MENU` / `BUILDIN_MENU`** — class-level label lists; selection index maps directly to the action.
+- **`_dispatch_yt(idx)` / `_dispatch_ya(idx)` / `_dispatch_buildin(idx)`** — index → callable, run, then `_pause()`.
+- **`_pause()`** — `input("Press Enter to continue...")` so results stay on screen before the next menu appears.
+- `move_tracks()` implements the transfer flow and JSON report; Buildin helpers (login/status/tools/call/logout/export/import) are thin wrappers around `BuildinClient` + `src/buildin_maps.py`.
+
+All output is color-coded via `src/color.py`. Contains hardcoded demo values — see Gotchas in AGENTS.md.
+
+### src/color.py — ANSI color helpers
+
+No-dependency color module. Auto-disabled by `NO_COLOR=1` or `TERM=dumb`.
+
+| Function | Purpose |
+|----------|---------|
+| `bold`, `cyan`, `green`, `yellow`, `red`, `blue`, `magenta` | Single-color wrappers |
+| `cyan_bold`, `green_bold`, `yellow_bold`, `red_bold` | Bold + color combos |
+
+Usage in `src/cli.py`: titles/URLs → `cyan`, success → `green`, warnings/prompts → `yellow`, errors → `red`, summaries → `bold`.
 
 ### src/buildin.py — `BuildinClient`
 
@@ -150,7 +171,8 @@ deleted in the UI.
 - `src/paths.py` — project-wide path constants and helpers (`ensure_directories`, `resolve`, `resolve_config`, `browser_auth_file`). All paths anchor to the repo root; no module should use bare relative filenames.
 - `src/config.py:11` — `load_config(path)` → dict; resolves `config.yaml` in `config/` (bare name) or the given path; raises on missing file / YAML error.
 - `src/args.py:4` — argparse; `--no-proxy`, `--proxy-port`, `--log-file` are parsed but never wired.
-- `src/logger.py:9` — `setup_logging(level, output_file)`; `get_logger(name)`. Logs go to `<root>/logs/`.
+- `src/logger.py:9` — `setup_logging(level, output_file)`; `get_logger(name)`. **File-only** logging: writes to `<root>/logs/music_api_<ts>.log`, nothing to stdout.
+- `src/color.py` — ANSI color helpers (no dependencies); auto-disabled by `NO_COLOR=1` / `TERM=dumb`.
 
 ## Data flows
 

@@ -23,14 +23,15 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 | File | Role |
 |------|------|
 | `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config/config.yaml` → `config["token"]` + `ytmusic_download_dir` (default `downloads`, relative paths anchored to the repo root) → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. Relative `--output` is redirected into `logs/` (main.py:30). Also calls `paths.ensure_directories()`. |
-| `src/cli.py` | Interactive menu loop (`CLI`, src/cli.py:6). Mode select → YT or Ya menu → dispatch to clients. Contains hardcoded demo values (see Gotchas). |
+| `src/cli.py` | Interactive curses menu loop (`CLI`, src/cli.py:10). Full-screen arrow-key menu (`_select`, curses wrapper): mode select → YT/Ya/Buildin sub-menu → `_dispatch_*` → `_pause` (Press Enter to continue). ANSI colors via `src/color.py`. Contains hardcoded demo values (see Gotchas). |
+| `src/color.py` | Lightweight ANSI color helpers (no dependencies). Auto-disabled by `NO_COLOR=1` or `TERM=dumb`. Functions: `bold`, `cyan`, `green`, `yellow`, `red`, `blue`, `magenta`, `*_bold` variants. |
 | `src/paths.py` | Single source of truth for all filesystem paths (`PROJECT_ROOT`, `CONFIG_DIR`, `DATA_DIR`, `DOWNLOAD_DIR`, `LOGS_DIR`, config/auth/map files, `resolve*` helpers). Paths are anchored to the repo root, never to the CWD. |
 | `src/yamusic.py` | `YaMusicHandle`: liked-track export, playlist map generation, Yandex playlist sync/CRUD, Yandex downloads (uses `yandex_music` built-in downloader). |
 | `src/ytmusic.py` | `YTMusicClient`: `ytmusicapi` wrapper — search/like import, playlist CRUD, "tracks out of playlist" detection, yt-dlp MP3 downloads, per-playlist `track_map_*.yaml`. Also configures logging **at import time**. |
 | `src/track.py` | `Track` NamedTuple `(artist, name)` — the transfer currency between both clients. |
 | `src/buildin.py` | `BuildinClient`: self-contained Buildin.ai MCP client — OAuth 2.1 discovery + dynamic registration + PKCE + local browser callback, token refresh, MCP Streamable HTTP (`initialize`, `tools/list`, `tools/call`), JSON and SSE responses. No MCP SDK / new dependencies. Optional: no network at startup. |
 | `src/buildin_maps.py` | Playlist-map sync with a dedicated Buildin page/database: `export_maps` (local YAML → Buildin, creates/updates records) and `import_maps`/`write_imported_maps` (Buildin → local YAML with diff + `.bak`). Page/database IDs cached in `config/buildin_music.json`. |
-| `src/args.py` / `src/config.py` / `src/logger.py` | argparse definitions, YAML config loader, console+file logging setup. |
+| `src/args.py` / `src/config.py` / `src/logger.py` | argparse definitions, YAML config loader, **file-only** logging (no console output; writes to `logs/music_api_<ts>.log`). |
 
 Detailed module reference, data flows and file schemas: **docs/ARCHITECTURE.md**.
 Full command reference with implementation mapping: **docs/COMMANDS.md**.
@@ -49,7 +50,10 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 
 ## Gotchas
 
-- **Interactive only.** All flows require `input()`; there is no non-interactive mode. Do not launch the CLI expecting pipeable output.
+- **Interactive only.** All flows use a curses menu (`_select`) + `input()` for confirmations; there is no non-interactive mode. Do not launch the CLI expecting pipeable output.
+- **Curses menu.** `src/cli.py` `_select` uses `curses.wrapper`; the terminal must be a real TTY (no pipes). Menu: ↑/↓ or j/k navigate, Enter select, q/esc back/quit, 1-N quick-pick.
+- **Colors.** All ANSI colors go through `src/color.py`; never use raw `\x1b[` sequences elsewhere. Set `NO_COLOR=1` to disable.
+- **Logging is file-only.** `setup_logging()` writes to `logs/music_api_<ts>.log`; nothing goes to stdout. yt-dlp logs go to `logs/download_log_<ts>.log` (import-time side effect of `src/ytmusic`).
 - **Import-time side effects.** `import src.ytmusic` creates `logs/` (at the repo root) and a `logs/download_log_<ts>.log` file immediately (src/ytmusic.py:14-37).
 - **Auth is checked at startup.** `YTMusicClient.__init__` runs `_check_auth()` (src/ytmusic.py:91) and warns — without aborting — when `config/browser.json` is expired (account endpoints then silently return logged-out/empty data) or cannot be verified (network/proxy down).
 - **yt-dlp failures are logged, not silent.** `download_track` (src/ytmusic.py:470) passes a custom `YtdlpLogger` (src/ytmusic.py:41) so yt-dlp errors/warnings land in `logs/download_log_<ts>.log`, and returns `None` when yt-dlp fails or the output file was not created. Its opts also set `js_runtimes` (node ≥20 or deno) and `remote_components: ['ejs:github']` — YouTube requires a JS runtime plus the EJS solver script (fetched from GitHub once, then cached).
@@ -87,6 +91,22 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 | New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli.py` Buildin helpers (src/cli.py:193-387) for the UI |
 | Change Buildin map fields/format | `src/buildin_maps.py` (`_record_properties`, `_records_to_maps`, `_parse_artists`) + README database-schema section |
 | Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:391) for YT, `sync_playlists_from_yaml` (src/yamusic.py:191) for Ya |
+
+## OpenCode agents & commands
+
+`.opencode/` contains project-level agent definitions and slash-commands for OpenCode (and compatible tools):
+
+| File | Role |
+|------|------|
+| `.opencode/agents/CodeReview.md` | T2 code reviewer — read-only, reviews the diff of the current branch against `origin/main`. Run before a PR. |
+| `.opencode/agents/huli.md` | Structure reviewer (T2-структура) — reviews `src/` layout, `AGENTS.md` conventions, `docs/`, `data/` schemas, `config/`. Run before a PR with structural changes. |
+| `.opencode/commands/review.md` | `/review` — invokes the `CodeReview` subagent on the current branch. |
+| `.opencode/commands/huli.md` | `/huli` — invokes the `huli` subagent on the current branch. |
+| `.opencode/commands/test.md` | `/test` — import smoke check (`uv run python -c "from src.cli import CLI; ..."`). |
+| `.opencode/commands/run.md` | `/run` — starts the interactive CLI (`uv run main.py`). |
+| `.opencode/commands/pr.md` | `/pr` — prepares a PR to `main` from the current branch. |
+
+Both agents are **read-only** (no `edit`, no `shell` write commands) — they report, you fix.
 
 ## Docs
 

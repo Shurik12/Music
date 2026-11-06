@@ -23,11 +23,25 @@ uv run main.py [flags]         # or: make run
 
 ## Interaction model
 
-`CLI.run()` (src/cli.py:174) loops:
+`CLI.run()` (src/cli.py) is a curses-based interactive loop. Every menu is a full-screen arrow-key interface (`_select`):
 
-1. **Mode selection**: `1` YouTube Music, `2` Yandex Music, `3` Buildin AI, `q/quit/exit` to quit.
-2. Inside a mode: type the command number (or alias). `help/?/empty` reprints the menu, `b/back` returns to mode selection, `q/quit/exit` quits.
-3. `Ctrl+C` quits gracefully; unexpected exceptions print `Error: ...` and return to the loop.
+**Key bindings (all menus):**
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `j` / `k` | Move highlight (wraps around) |
+| `Enter` | Select highlighted item |
+| `1`–`9` (or `0` for 10th) | Quick-pick without navigating |
+| `q` / `Esc` | Go back to mode selection (top-level: quit) |
+
+**Flow:**
+
+1. **Mode selection** (curses): YouTube Music / Yandex Music / Buildin AI. `q`/`Esc` exits.
+2. Inside a mode (curses sub-menu): navigate, select a command. `q`/`Esc` returns to mode selection.
+3. After a command completes, `_pause()` prints `Press Enter to continue...` and waits — results stay on screen.
+4. `Ctrl+C` quits gracefully; unexpected exceptions print a red `Error: ...` and return to the menu.
+
+Output colors: cyan (titles/URLs), green (success), yellow (warnings/prompts), red (errors), bold (summaries). Set `NO_COLOR=1` to disable.
 
 Quitting does not require confirmation; all commands act immediately on live accounts.
 
@@ -35,48 +49,48 @@ Quitting does not require confirmation; all commands act immediately on live acc
 
 ## YouTube Music mode
 
-Handler: `CLI.handle_ytmusic_command` (src/cli.py:127).
+Handler: `_dispatch_yt(idx)` (src/cli.py). Menu items in `CLI.YT_MENU`.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `list` | List playlists | `list_playlists` (src/cli.py:56) → `YTMusicClient.get_playlists/print_playlists` (src/ytmusic.py:172,189) | Prints `title: playlistId` (up to 100 playlists) |
-| 2 | `artists` | Get playlist artists | src/cli.py:64 → `get_playlist/get_playlist_artists` (src/ytmusic.py:227,235) | **Hardcoded to `playlists[1]`** — effectively a debug command |
-| 3 | `tracks` | Count liked tracks not in any playlist | src/cli.py:133 → `get_track_out_playlist` (src/ytmusic.py:334) | Read-only; walks every library playlist (slow on big libraries) |
-| 4 | `print` | Write those tracks out | src/cli.py:136 → `print_tracks` (src/ytmusic.py:374) | Writes `logs/tracks.txt` (artist/title/videoId, TSV) |
-| 5 | `playlist_map` | Update playlist map | src/cli.py:140 → `update_playlists_map` (src/ytmusic.py:407) | Writes `data/playlists_map_updated.yaml`; excludes `LM`/`SE` |
-| 6 | `distribute` | Add out-of-playlist tracks to playlists | src/cli.py:142 → `distribute_tracks` (src/ytmusic.py:391) | **Mutates YouTube playlists** based on `data/playlists_map.yaml` artist match |
-| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:580) | yt-dlp + SOCKS5; writes `<ytmusic_download_dir>/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
-| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:470) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `<ytmusic_download_dir>/` |
+| # | Action | Implementation | Side effects / notes |
+|---|--------|----------------|----------------------|
+| 1 | List playlists | `list_playlists` (src/cli.py) → `YTMusicClient.get_playlists` (src/ytmusic.py:172) | Prints `title: playlistId` (up to 100 playlists) |
+| 2 | Playlist artists | `get_playlist_artists` (src/cli.py) → `get_playlist/get_playlist_artists` (src/ytmusic.py:227,235) | **Hardcoded to `playlists[1]`** — effectively a debug command |
+| 3 | Tracks out of playlist | `_dispatch_yt[2]` → `get_track_out_playlist` (src/ytmusic.py:334) | Read-only; walks every library playlist (slow on big libraries) |
+| 4 | Print tracks to file | `_dispatch_yt[3]` → `print_tracks` (src/ytmusic.py:374) | Writes `logs/tracks.txt` (artist/title/videoId, TSV) |
+| 5 | Update playlist map | `_dispatch_yt[4]` → `update_playlists_map` (src/ytmusic.py:407) | Writes `data/playlists_map_updated.yaml`; excludes `LM`/`SE` |
+| 6 | Distribute tracks | `_dispatch_yt[5]` → `distribute_tracks` (src/ytmusic.py:391) | **Mutates YouTube playlists** based on `data/playlists_map.yaml` artist match |
+| 7 | Download all playlists | `_dispatch_yt[6]` → `download_all_playlists` (src/ytmusic.py:580) | yt-dlp + SOCKS5; writes `<ytmusic_download_dir>/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
+| 8 | Download track | `_dispatch_yt[7]` → `download_track` (src/ytmusic.py:470) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `<ytmusic_download_dir>/` |
 
 ## Yandex Music mode
 
-Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
+Handler: `_dispatch_ya(idx)` (src/cli.py). Menu items in `CLI.YA_MENU`.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `transfer` | Transfer liked tracks to YouTube Music | `transfer_tracks` (src/cli.py:119) → `move_tracks` (src/cli.py:76) | Asks `y/n`; searches and **likes each track on YouTube**; writes result JSON (`--output`, default `logs/tracks.json`); slow (1 search per track) |
-| 2 | `download_playlists` | Download all Yandex playlists | src/cli.py:158 → `download_playlists` (src/yamusic.py:179) | MP3 via Yandex API into `downloads/<Playlist>/`; existing files skipped by filename |
-| 3 | `download_liked` | Download liked tracks | src/cli.py:160 → `download_like_tracks` (src/yamusic.py:184) | Into `downloads/Like/` |
-| 4 | `playlist_map` | Generate playlist map | src/cli.py:162 → `playlist_map` (src/yamusic.py:85) | Writes `data/temp_playlist_map.yaml` |
-| 5 | `p` (note: not `changes`) | Remove broken liked tracks | src/cli.py:164 → `check_tracks` (src/yamusic.py:308) | **Destructive**: unlikes tracks that fail to fetch (per-track error print) |
-| 6 | `sync` | Sync playlists from `data/yamusic.yaml` | src/cli.py:166 → `sync_playlists_from_yaml` (src/yamusic.py:191) | **Destructive**: clears each playlist in the YAML, then refills from liked tracks by artist match; creates missing playlists; batches of 50 |
+| # | Action | Implementation | Side effects / notes |
+|---|--------|----------------|----------------------|
+| 1 | Transfer to YouTube Music | `transfer_tracks` (src/cli.py) → `move_tracks` (src/cli.py) | Asks `y/n`; searches and **likes each track on YouTube**; writes result JSON (`--output`, default `logs/tracks.json`); slow (1 search per track) |
+| 2 | Download playlists | `_dispatch_ya[1]` → `download_playlists` (src/yamusic.py:179) | MP3 via Yandex API into `downloads/<Playlist>/`; existing files skipped by filename |
+| 3 | Download liked tracks | `_dispatch_ya[2]` → `download_like_tracks` (src/yamusic.py:184) | Into `downloads/Like/` |
+| 4 | Get playlist map | `_dispatch_ya[3]` → `playlist_map` (src/yamusic.py:85) | Writes `data/temp_playlist_map.yaml` |
+| 5 | Remove broken liked tracks | `_dispatch_ya[4]` → `check_tracks` (src/yamusic.py:308) | **Destructive**: unlikes tracks that fail to fetch (per-track error print) |
+| 6 | Sync playlists from YAML | `_dispatch_ya[5]` → `sync_playlists_from_yaml` (src/yamusic.py:191) | **Destructive**: clears each playlist in the YAML, then refills from liked tracks by artist match; creates missing playlists; batches of 50 |
 
 ## Buildin AI mode
 
-Handler: `CLI.handle_buildin_command` (src/cli.py:302). The client is
-`BuildinClient` (src/buildin.py:130); it speaks MCP Streamable HTTP and uses
-the OAuth metadata advertised by the MCP endpoint. Startup performs no Buildin
-network calls.
+Handler: `_dispatch_buildin(idx)` (src/cli.py). Menu items in `CLI.BUILDIN_MENU`.
+The client is `BuildinClient` (src/buildin.py:130); it speaks MCP Streamable HTTP
+and uses the OAuth metadata advertised by the MCP endpoint. Startup performs no
+Buildin network calls.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `login` | Authorize with Buildin | `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
-| 2 | `status` | Show auth state | `BuildinClient.status` (src/buildin.py:153) + `CLI.buildin_status` (src/cli.py:218) | Prints endpoint, token file, authorization state and expiry; no network |
-| 3 | `tools` | List MCP tools | `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
-| 4 | `call` | Call an MCP tool | `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
-| 5 | `logout` | Forget tokens | `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
-| 6 | `export_maps` | Export playlist maps to Buildin | `buildin_export_maps` (src/cli.py:305) → `export_maps` (src/buildin_maps.py:53) | Creates/reuses the *Music Library* page + *Playlists* database, then creates/updates one record per playlist (matched by Platform+Title); remote write |
-| 7 | `import_maps` | Import playlist maps from Buildin | `buildin_import_maps` (src/cli.py:326) → `import_maps` / `write_imported_maps` (src/buildin_maps.py:114,138) | Reads the database, prints a per-platform diff, asks `y/n`, then rewrites `data/playlists_map.yaml` and `data/yamusic.yaml` with `.bak` backups; keeps a file whose platform has no records |
+| # | Action | Implementation | Side effects / notes |
+|---|--------|----------------|----------------------|
+| 1 | Log in | `buildin_login` (src/cli.py) → `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
+| 2 | Status | `buildin_status` (src/cli.py) → `BuildinClient.status` (src/buildin.py:153) | Prints endpoint, token file, authorization state and expiry; no network |
+| 3 | List MCP tools | `buildin_tools` (src/cli.py) → `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
+| 4 | Call MCP tool | `buildin_call_tool` (src/cli.py) → `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
+| 5 | Log out | `buildin_logout` (src/cli.py) → `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
+| 6 | Export maps | `buildin_export_maps` (src/cli.py) → `export_maps` (src/buildin_maps.py:53) | Creates/reuses the *Music Library* page + *Playlists* database, then creates/updates one record per playlist (matched by Platform+Title); remote write |
+| 7 | Import maps | `buildin_import_maps` (src/cli.py) → `import_maps` / `write_imported_maps` (src/buildin_maps.py:114,138) | Reads the database, prints a per-platform diff, asks `y/n`, then rewrites `data/playlists_map.yaml` and `data/yamusic.yaml` with `.bak` backups; keeps a file whose platform has no records |
 
 Transport details (src/buildin.py:435-556): `initialize` +
 `notifications/initialized`, `Mcp-Session-Id`/`MCP-Protocol-Version` headers,
