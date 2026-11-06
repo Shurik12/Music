@@ -1,40 +1,23 @@
+import os
+import sys
+import logging
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
+
 import requests
+import yaml
+import yt_dlp
 from tqdm import tqdm
 from ytmusicapi import YTMusic
-from typing import List, Dict, Any, Optional, Set, Union, Tuple
-import yaml
-from pathlib import Path
-import os
-import logging
-import yt_dlp
-from datetime import datetime
 
-from src import paths
+from . import paths
+from .track import Track
 
-# Create logs directory if it doesn't exist
-logs_dir = paths.LOGS_DIR
-logs_dir.mkdir(exist_ok=True)
-
-# Configure logging to write to log folder
-log_filename = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-file_handler = logging.FileHandler(log_filename)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)  # Only show warnings and errors in console
-console_handler.setFormatter(logging.Formatter('%(message)s'))
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-# Create a separate logger for file-only logs
+# Module-level loggers (handlers attached in YTMusicClient.__init__ via _setup_download_logger)
 file_logger = logging.getLogger(f"{__name__}.file")
-file_logger.setLevel(logging.INFO)
-file_logger.addHandler(file_handler)
-file_logger.propagate = False  # Don't send to console
+file_logger.propagate = False
 
 
 class YtdlpLogger:
@@ -65,14 +48,12 @@ class YtdlpLogger:
         file_logger.error(f"yt-dlp: {msg}")
 
 
-from src.track import Track
-
-
 class YTMusicClient:
     def __init__(
         self,
         download_dir: str = str(paths.DOWNLOAD_DIR),
     ):
+        self._setup_download_logger()
         self.download_dir = download_dir
         session = requests.Session()
         session.proxies = {
@@ -87,6 +68,19 @@ class YTMusicClient:
             requests_session=session,
         )
         self._check_auth()
+
+    def _setup_download_logger(self) -> None:
+        """Create the per-run download log file and attach it to file_logger."""
+        logs_dir = paths.LOGS_DIR
+        logs_dir.mkdir(exist_ok=True)
+        global log_filename
+        log_filename = logs_dir / f"download_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        file_handler = logging.FileHandler(log_filename, encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        # Avoid double-attaching if the client is constructed more than once
+        file_logger.handlers.clear()
+        file_logger.addHandler(file_handler)
 
     def _check_auth(self) -> None:
         """Probe the account endpoint; expired browser.json silently returns logged-out data."""
@@ -480,9 +474,7 @@ class YTMusicClient:
         Download a single track from YouTube using yt-dlp.
         """
         output_path = output_path or self.download_dir
-        import sys
-        from contextlib import contextmanager
-        
+
         @contextmanager
         def suppress_output():
             """Context manager to suppress stdout and stderr"""
