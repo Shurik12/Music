@@ -5,16 +5,17 @@ Technical specification of the Music tool: modules, data flows, file schemas, kn
 ## Component overview
 
 ```
-main.py
-  │  parse_args()  ──►  setup_logging()  ──►  load_config("config/config.yaml")
+main.py  ──►  src.cli.app (Typer)
+  │  callback (src/cli.py)  ──►  ensure_directories()  ──►  setup_logging()
+  │                              ──►  load_config("config/config.yaml")
+  │                              ──►  initialize clients  ──►  ctx.obj = CliContext
   │
-  ├── YaMusicHandle   (src/yamusic.py)  ──►  Yandex Music API  (yandex_music lib, direct)
-  ├── YTMusicClient   (src/ytmusic.py)  ──►  YouTube Music API (ytmusicapi)
-  │                                     ──►  YouTube downloads (yt-dlp, SOCKS5)
-  ├── BuildinClient   (src/buildin.py)  ──►  Buildin MCP (OAuth 2.1 + Streamable HTTP)
-  │
-  └── CLI             (src/cli.py)      interactive loop, dispatches to both clients
+  ├── ytmusic   sub-app  (src/cli_ytmusic.py)   ──►  YTMusicClient  (src/ytmusic.py)
+  ├── yamusic   sub-app  (src/cli_yamusic.py)   ──►  YaMusicHandle  (src/yamusic.py)
+  └── buildin   sub-app  (src/cli_buildin.py)   ──►  BuildinClient  (src/buildin.py)
 ```
+
+Shared types: `Track` (src/track.py), `CliContext` (src/cli_base.py).
 
 Shared types: `Track` (src/track.py) — `NamedTuple(artist: str, name: str)`.
 
@@ -35,17 +36,18 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 
 ## Startup sequence
 
-1. `main.py:22` calls `paths.ensure_directories()` → creates `config/`, `data/`, `downloads/`, `logs/` at the repo root.
-2. `parse_args()` (src/args.py:4) — see flags in COMMANDS.md.
-3. Relative `--output` is rebased into `logs/` (main.py:30-31).
-4. `setup_logging()` (src/logger.py:9) — root logger → console (stdout) + `logs/music_api_<ts>.log`.
-5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py:57` uses `config["token"]`.
-6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
-7. `YTMusicClient()` (src/ytmusic.py:72) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:91), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable.
-8. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
-9. `CLI(yamusic, ytmusic, buildin, args).run()` (src/cli.py:320) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
+The Typer callback in `src/cli.py` runs before any sub-command and performs:
 
-Any exception in startup is caught in `main.py:83`, logged with traceback, exit code 1.
+1. `paths.ensure_directories()` — creates `config/`, `data/`, `downloads/`, `logs/` at the repo root.
+2. Global options are read from the CLI (see COMMANDS.md); a relative `--output` is rebased into `logs/`.
+3. `setup_logging()` (src/logger.py:9) — root logger → console (stdout) + `logs/music_api_<ts>.log`.
+4. `load_config()` (src/config.py:11) resolves and reads the YAML file.
+5. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
+6. `YTMusicClient()` (src/ytmusic.py:72) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:91), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable.
+7. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
+8. The callback stores everything in `ctx.obj = CliContext(...)` (src/cli_base.py); leaf commands pull it via `get_context(ctx)`.
+
+The callback runs before every sub-command (Typer invokes it first). `main.py` is a thin `app()` wrapper; `Ctrl+C` exits with code 0.
 
 ## Module reference
 
@@ -149,7 +151,12 @@ deleted in the UI.
 
 - `src/paths.py` — project-wide path constants and helpers (`ensure_directories`, `resolve`, `resolve_config`, `browser_auth_file`). All paths anchor to the repo root; no module should use bare relative filenames.
 - `src/config.py:11` — `load_config(path)` → dict; resolves `config.yaml` in `config/` (bare name) or the given path; raises on missing file / YAML error.
-- `src/args.py:4` — argparse; `--no-proxy`, `--proxy-port`, `--log-file` are parsed but never wired.
+- `src/args.py` — `LogLevel` enum (DEBUG–CRITICAL) used by the Typer `--log-level` option.
+- `src/cli.py` — Typer root app: defines the `@app.callback()` that wires up logging, config and clients, and mounts the three sub-apps.
+- `src/cli_ytmusic.py`, `src/cli_yamusic.py`, `src/cli_buildin.py` — leaf sub-commands; each pulls the shared `CliContext` via `get_context(ctx)`.
+- `src/cli_base.py` — `CliContext` dataclass (holds `yamusic`, `ytmusic`, `buildin` clients and the global-args namespace) plus `get_context` / `require_context` helpers.
+
+Known unwired flags (unchanged from the argparse era): `--no-proxy`, `--proxy-port`, `--log-file` are parsed and logged but never applied to the clients (SOCKS5 is hardcoded in src/ytmusic.py).
 - `src/logger.py:9` — `setup_logging(level, output_file)`; `get_logger(name)`. Logs go to `<root>/logs/`.
 
 ## Data flows

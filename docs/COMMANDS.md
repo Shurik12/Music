@@ -1,82 +1,80 @@
 # Command Reference
 
-Full user-facing reference for the interactive CLI, with implementation mapping.
-Implementation column points to `file:line` of the handler and the client method it calls.
+Full user-facing reference for the Typer CLI. The root `music` command mounts
+three sub-apps — `ytmusic`, `yamusic`, `buildin` — each with its own commands.
+Global options are passed on the command line (before or after the sub-command;
+Typer's callback runs first either way).
 
 ## Startup
 
 ```bash
 uv sync                        # first time / after dependency changes
-uv run main.py [flags]         # or: make run
+uv run main.py [GLOBAL-OPTS] COMMAND [ARGS]...
+uv run main.py [GLOBAL-OPTS] COMMAND --help   # per-command help
 ```
 
-### Flags (src/args.py)
+### Global flags (src/cli.py callback)
 
 | Flag | Default | Status | Description |
 |------|---------|--------|-------------|
-| `--config PATH` | `config/config.yaml` | wired | YAML file with the Yandex token; a bare name is looked up in `config/` (then the legacy repo root) |
-| `--output NAME` | `tracks.json` | wired | Transfer result JSON; relative paths are placed under `logs/` (main.py:30) |
+| `--config PATH` / `-c` | `config/config.yaml` | wired | YAML file with the Yandex token; a bare name is looked up in `config/` (then the legacy repo root) |
+| `--output NAME` / `-o` | — (default `logs/tracks.json` for `yamusic transfer`) | wired | Where `yamusic transfer` writes its JSON report; relative paths are rebased into `logs/` |
 | `--no-proxy` | off | **parsed, unused** | Logged but never applied to clients |
 | `--proxy-port N` | `1080` | **parsed, unused** | Logged but never applied (`1080` ciadpi / `9150` Tor) |
-| `--log-level LEVEL` | `INFO` | wired | `DEBUG`–`CRITICAL` |
+| `--log-level LEVEL` | `INFO` | wired | `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` |
 | `--log-file NAME` | — | **parsed, unused** | Not passed to `setup_logging` |
 
-## Interaction model
+### Destructive commands
 
-`CLI.run()` (src/cli.py:174) loops:
-
-1. **Mode selection**: `1` YouTube Music, `2` Yandex Music, `3` Buildin AI, `q/quit/exit` to quit.
-2. Inside a mode: type the command number (or alias). `help/?/empty` reprints the menu, `b/back` returns to mode selection, `q/quit/exit` quits.
-3. `Ctrl+C` quits gracefully; unexpected exceptions print `Error: ...` and return to the loop.
-
-Quitting does not require confirmation; all commands act immediately on live accounts.
+Destructive commands (`yamusic transfer`, `yamusic check-tracks`,
+`yamusic sync-from-yaml`, `buildin import-maps`) prompt for `y/n` confirmation
+unless `--yes` / `-y` is passed.
 
 ---
 
-## YouTube Music mode
+## ytmusic sub-app
 
-Handler: `CLI.handle_ytmusic_command` (src/cli.py:127).
+Handler module: `src/cli_ytmusic.py`.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `list` | List playlists | `list_playlists` (src/cli.py:56) → `YTMusicClient.get_playlists/print_playlists` (src/ytmusic.py:172,189) | Prints `title: playlistId` (up to 100 playlists) |
-| 2 | `artists` | Get playlist artists | src/cli.py:64 → `get_playlist/get_playlist_artists` (src/ytmusic.py:227,235) | **Hardcoded to `playlists[1]`** — effectively a debug command |
-| 3 | `tracks` | Count liked tracks not in any playlist | src/cli.py:133 → `get_track_out_playlist` (src/ytmusic.py:334) | Read-only; walks every library playlist (slow on big libraries) |
-| 4 | `print` | Write those tracks out | src/cli.py:136 → `print_tracks` (src/ytmusic.py:374) | Writes `logs/tracks.txt` (artist/title/videoId, TSV) |
-| 5 | `playlist_map` | Update playlist map | src/cli.py:140 → `update_playlists_map` (src/ytmusic.py:407) | Writes `data/playlists_map_updated.yaml`; excludes `LM`/`SE` |
-| 6 | `distribute` | Add out-of-playlist tracks to playlists | src/cli.py:142 → `distribute_tracks` (src/ytmusic.py:391) | **Mutates YouTube playlists** based on `data/playlists_map.yaml` artist match |
-| 7 | `download` | Download all playlists | src/cli.py:144 → `download_all_playlists` (src/ytmusic.py:580) | yt-dlp + SOCKS5; writes `<ytmusic_download_dir>/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable; failed downloads return `None` and log the reason to `logs/download_log_*.log` |
-| 8 | `download_track` | Download one track | src/cli.py:146 → `download_track` (src/ytmusic.py:470) | **Hardcoded demo video id `9zhK-QaEYZY`**; saves to `<ytmusic_download_dir>/` |
+| Command | Action | Implementation | Side effects / notes |
+|---------|--------|----------------|----------------------|
+| `list-playlists` | List all user playlists | `YTMusicClient.get_playlists/print_playlists` (src/ytmusic.py:172,189) | Prints `title: playlistId` (up to 100) |
+| `playlist-artists [-i N]` | Print artists in playlist at index N | `get_playlist/get_playlist_artists` (src/ytmusic.py:227,235) | Index `0`-based; default `1` |
+| `tracks-out-of-playlist` | Count liked tracks not in any playlist | `get_track_out_playlist` (src/ytmusic.py:334) | Read-only; walks every library playlist |
+| `print-tracks` | Write those tracks to a file | `print_tracks` (src/ytmusic.py:374) | Writes `logs/tracks.txt` (artist/title/videoId, TSV) |
+| `update-map [-o PATH]` | Regenerate the YT playlist map | `update_playlists_map` (src/ytmusic.py:407) | Writes `data/playlists_map_updated.yaml`; excludes `LM`/`SE` |
+| `distribute` | Add out-of-playlist tracks to playlists | `distribute_tracks` (src/ytmusic.py:391) | **Mutates YouTube playlists** based on `data/playlists_map.yaml` artist match |
+| `download-all [-f FMT] [-q QUAL] [--no-skip] [--limit N]` | Download every user playlist | `download_all_playlists` (src/ytmusic.py:580) | yt-dlp + SOCKS5; writes `<ytmusic_download_dir>/<Playlist>/` and `track_map_*.yaml`; skips `LM`/`SE`; resumable |
+| `download-track -v VIDEO_ID [-q QUAL] [-f FMT] [--quiet]` | Download one track | `download_track` (src/ytmusic.py:470) | Saves to `<ytmusic_download_dir>/`; returns the saved path on success |
 
-## Yandex Music mode
+## yamusic sub-app
 
-Handler: `CLI.handle_yamusic_command` (src/cli.py:154).
+Handler module: `src/cli_yamusic.py`.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `transfer` | Transfer liked tracks to YouTube Music | `transfer_tracks` (src/cli.py:119) → `move_tracks` (src/cli.py:76) | Asks `y/n`; searches and **likes each track on YouTube**; writes result JSON (`--output`, default `logs/tracks.json`); slow (1 search per track) |
-| 2 | `download_playlists` | Download all Yandex playlists | src/cli.py:158 → `download_playlists` (src/yamusic.py:179) | MP3 via Yandex API into `downloads/<Playlist>/`; existing files skipped by filename |
-| 3 | `download_liked` | Download liked tracks | src/cli.py:160 → `download_like_tracks` (src/yamusic.py:184) | Into `downloads/Like/` |
-| 4 | `playlist_map` | Generate playlist map | src/cli.py:162 → `playlist_map` (src/yamusic.py:85) | Writes `data/temp_playlist_map.yaml` |
-| 5 | `p` (note: not `changes`) | Remove broken liked tracks | src/cli.py:164 → `check_tracks` (src/yamusic.py:308) | **Destructive**: unlikes tracks that fail to fetch (per-track error print) |
-| 6 | `sync` | Sync playlists from `data/yamusic.yaml` | src/cli.py:166 → `sync_playlists_from_yaml` (src/yamusic.py:191) | **Destructive**: clears each playlist in the YAML, then refills from liked tracks by artist match; creates missing playlists; batches of 50 |
+| Command | Action | Implementation | Side effects / notes |
+|---------|--------|----------------|----------------------|
+| `transfer [-o PATH] [-y]` | Transfer liked tracks to YouTube Music | `export_liked_tracks` → `import_liked_tracks` (src/yamusic.py:16, src/ytmusic.py:120) | Searches and **likes each track on YouTube**; writes result JSON (default `logs/tracks.json`); destructive |
+| `download-playlists` | Download all Yandex playlists | `download_playlists` (src/yamusic.py:179) | MP3 via Yandex API into `downloads/<Playlist>/` |
+| `download-liked` | Download liked tracks as one folder | `download_like_tracks` (src/yamusic.py:184) | Into `downloads/Like/` |
+| `playlist-map [-o PATH]` | Generate the Yandex playlist map | `playlist_map` (src/yamusic.py:85) | Writes `data/temp_playlist_map.yaml` |
+| `check-tracks [-y]` | Remove broken liked tracks | `check_tracks` (src/yamusic.py:308) | **Destructive**: unlikes tracks that fail to fetch |
+| `sync-from-yaml [-f FILE] [-y]` | Clear and repopulate Yandex playlists from YAML | `sync_playlists_from_yaml` (src/yamusic.py:191) | **Destructive**: clears each playlist in the YAML, then refills from liked tracks by artist match; batches of 50 |
 
-## Buildin AI mode
+## buildin sub-app
 
-Handler: `CLI.handle_buildin_command` (src/cli.py:302). The client is
-`BuildinClient` (src/buildin.py:130); it speaks MCP Streamable HTTP and uses
-the OAuth metadata advertised by the MCP endpoint. Startup performs no Buildin
-network calls.
+Handler module: `src/cli_buildin.py`. The client is `BuildinClient`
+(src/buildin.py:130); it speaks MCP Streamable HTTP and uses the OAuth metadata
+advertised by the MCP endpoint. Startup performs no Buildin network calls.
 
-| # | Aliases | Action | Implementation | Side effects / notes |
-|---|---------|--------|----------------|----------------------|
-| 1 | `login` | Authorize with Buildin | `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
-| 2 | `status` | Show auth state | `BuildinClient.status` (src/buildin.py:153) + `CLI.buildin_status` (src/cli.py:218) | Prints endpoint, token file, authorization state and expiry; no network |
-| 3 | `tools` | List MCP tools | `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
-| 4 | `call` | Call an MCP tool | `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
-| 5 | `logout` | Forget tokens | `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
-| 6 | `export_maps` | Export playlist maps to Buildin | `buildin_export_maps` (src/cli.py:305) → `export_maps` (src/buildin_maps.py:53) | Creates/reuses the *Music Library* page + *Playlists* database, then creates/updates one record per playlist (matched by Platform+Title); remote write |
-| 7 | `import_maps` | Import playlist maps from Buildin | `buildin_import_maps` (src/cli.py:326) → `import_maps` / `write_imported_maps` (src/buildin_maps.py:114,138) | Reads the database, prints a per-platform diff, asks `y/n`, then rewrites `data/playlists_map.yaml` and `data/yamusic.yaml` with `.bak` backups; keeps a file whose platform has no records |
+| Command | Action | Implementation | Side effects / notes |
+|---------|--------|----------------|----------------------|
+| `login` | Authorize with Buildin | `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
+| `status` | Show auth state | `BuildinClient.status` (src/buildin.py:153) | Prints endpoint, token file, authorization state and expiry; no network |
+| `tools` | List MCP tools | `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed |
+| `call -t NAME [-a JSON]` | Call an MCP tool | `BuildinClient.call_tool` (src/buildin.py:231) | Takes a `--tool` name and a `--args` JSON object; prints text content or raw JSON |
+| `logout` | Forget tokens | `BuildinClient.logout` (src/buildin.py:223) | Deletes the token file and resets the MCP session |
+| `export-maps` | Export playlist maps to Buildin | `export_maps` (src/buildin_maps.py:53) | Creates/reuses the *Music Library* page + *Playlists* database, then creates/updates one record per playlist |
+| `import-maps [-y]` | Import playlist maps from Buildin | `import_maps` / `write_imported_maps` (src/buildin_maps.py:114,138) | Reads the database, prints a per-platform diff, then rewrites `data/playlists_map.yaml` and `data/yamusic.yaml` with `.bak` backups |
 
 Transport details (src/buildin.py:435-556): `initialize` +
 `notifications/initialized`, `Mcp-Session-Id`/`MCP-Protocol-Version` headers,
@@ -100,16 +98,16 @@ All paths are relative to the repository root (see `src/paths.py`).
 
 | Command | Output |
 |---------|--------|
-| YT 4 | `logs/tracks.txt` |
-| YT 5 | `data/playlists_map_updated.yaml` |
-| YT 7 | `<ytmusic_download_dir>/<Playlist>/*.mp3`, `<ytmusic_download_dir>/<Playlist>/track_map_<Playlist>.yaml`, `logs/download_log_*.log`, `logs/music_api_*.log` |
-| YT 8 | `<ytmusic_download_dir>/<artist> - <title>.mp3` |
-| Ya 1 | `logs/tracks.json` (or `--output`) |
-| Ya 2/3 | `downloads/<Playlist>/*.mp3` |
-| Ya 4 | `data/temp_playlist_map.yaml` |
-| Buildin 1 | `config/buildin_tokens.json` |
-| Buildin 6 | Buildin page/database; `config/buildin_music.json` (ID cache) |
-| Buildin 7 | `data/playlists_map.yaml`, `data/yamusic.yaml` (+ `.bak` copies) |
+| `ytmusic print-tracks` | `logs/tracks.txt` |
+| `ytmusic update-map` | `data/playlists_map_updated.yaml` |
+| `ytmusic download-all` | `<ytmusic_download_dir>/<Playlist>/*.mp3`, `<ytmusic_download_dir>/<Playlist>/track_map_<Playlist>.yaml`, `logs/download_log_*.log`, `logs/music_api_*.log` |
+| `ytmusic download-track` | `<ytmusic_download_dir>/<artist> - <title>.mp3` |
+| `yamusic transfer` | `logs/tracks.json` (or `--output`) |
+| `yamusic download-playlists` / `yamusic download-liked` | `downloads/<Playlist>/*.mp3` |
+| `yamusic playlist-map` | `data/temp_playlist_map.yaml` |
+| `buildin login` | `config/buildin_tokens.json` |
+| `buildin export-maps` | Buildin page/database; `config/buildin_music.json` (ID cache) |
+| `buildin import-maps` | `data/playlists_map.yaml`, `data/yamusic.yaml` (+ `.bak` copies) |
 | every run | `logs/music_api_<timestamp>.log` |
 
 ## Makefile targets

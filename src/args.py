@@ -1,44 +1,20 @@
-import argparse
+"""Argument parsing for the CLI.
+
+The old argparse parser is gone; Typer reads the options directly from
+:mod:`src.cli`. This module keeps only the shared :class:`LogLevel` enum that
+Typer options need to expose ``--log-level`` with proper validation.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(
-        description="Transfer tracks from Yandex.Music to YouTube Music"
-    )
-    parser.add_argument(
-        "--config", 
-        type=str, 
-        default="config.yaml", 
-        help="Config file (default: config/config.yaml)"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="tracks.json",
-        help="Output json file for transfer results",
-    )
-    parser.add_argument(
-        "--no-proxy", 
-        action="store_true", 
-        help="Disable proxy (overrides config)"
-    )
-    parser.add_argument(
-        "--proxy-port", 
-        type=int, 
-        default=1080, 
-        help="Proxy port (1080 for ciadpi, 9150 for Tor)"
-    )
-    parser.add_argument(
-        "--log-level", 
-        type=str, 
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Set the logging level"
-    )
-    parser.add_argument(
-        "--log-file",
-        type=str,
-        help="Specific log file name (optional, default: auto-generated with timestamp)"
-    )
-    return parser.parse_args()
+class LogLevel(str, Enum):
+    """Supported log levels (mirrors the old argparse ``choices``)."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
