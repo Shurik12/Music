@@ -28,9 +28,8 @@ def main() -> None:
     args = parse_args()
     
     # Setup logging first - use logs directory
-    # Override output path to use logs folder if not absolute path
-    if args.output and not Path(args.output).is_absolute():
-        args.output = str(logs_dir / args.output)
+    # All output paths are anchored to the repo root via paths.resolve()
+    args.output = str(paths.resolve(args.output))
     
     setup_logging(args.log_level, args.output)
     logger = get_logger(__name__)
