@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 
+from . import color
 from .yamusic import YaMusicHandle
 from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
@@ -16,72 +17,88 @@ class CLI:
         self.running = True
         self.mode = None  # 'ytmusic', 'yamusic' or 'buildin'
         
-    def print_mode_selection(self):
-        """Display mode selection menu"""
-        print("\n" + "="*50)
-        print("Select API Mode")
-        print("="*50)
-        print("1. YouTube Music")
-        print("2. Yandex Music")
-        print("3. Buildin AI")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
-    def print_ytmusic_menu(self):
-        """Display YouTube Music specific menu"""
-        print("\n" + "="*50)
-        print("YouTube Music Commands")
-        print("="*50)
-        print("1. List playlists")
-        print("2. Get playlist artists")
-        print("3. Get tracks from liked playlist")
-        print("4. Print tracks to file")
-        print("5. Update playlist map")
-        print("6. Distribute tracks by playlists")
-        print("7. Download all user playlists")
-        print("8. Download track")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
-    def print_yamusic_menu(self):
-        """Display Yandex Music specific menu"""
-        print("\n" + "="*50)
-        print("Yandex Music Commands")
-        print("="*50)
-        print("1. Transfer tracks to YouTube Music")
-        print("2. Download playlists")
-        print("3. Download liked tracks as playlist")
-        print("4. Get playlist map")
-        print("5. Playlist changes")
-        print("6. Sync playlists from yaml")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
-    
-    def print_buildin_menu(self):
-        """Display Buildin AI specific menu"""
-        print("\n" + "="*50)
-        print("Buildin AI Commands")
-        print("="*50)
-        print("1. Log in (browser OAuth)")
-        print("2. Show status")
-        print("3. List MCP tools")
-        print("4. Call MCP tool")
-        print("5. Log out")
-        print("6. Export playlist maps to Buildin")
-        print("7. Import playlist maps from Buildin")
-        print("b, back - Return to mode selection")
-        print("q, quit, exit - Exit program")
-        print("="*50)
+    @staticmethod
+    def _select(title: str, items: list[str],
+               back_label: str = "Back") -> int:
+        """Interactive curses menu. Returns 0-based index, or -1 for back/quit."""
+        import curses
+
+        footer = [f"{back_label}  ·  q / esc to {back_label.lower()}",
+                  "↑/↓ move  ·  enter select  ·  1-N quick pick"]
+
+        def _run(stdscr) -> int:
+            curses.curs_set(0)
+            stdscr.keypad(True)
+            curses.use_default_colors()
+            #  1=title  2=separator  3=selected-item  4=footer
+            curses.init_pair(1, curses.COLOR_CYAN,   -1)
+            curses.init_pair(2, curses.COLOR_WHITE,  -1)
+            curses.init_pair(3, curses.COLOR_GREEN,  -1)
+            curses.init_pair(4, curses.COLOR_YELLOW, -1)
+
+            selected = [0]
+            n = len(items)
+
+            def frame() -> None:
+                stdscr.erase()
+                max_y, max_x = stdscr.getmaxyx()
+                stdscr.addnstr(0, 2, title, max_x - 4,
+                               curses.A_BOLD | curses.color_pair(1))
+                stdscr.addnstr(1, 2, "─" * (max_x - 4), max_x - 4,
+                               curses.color_pair(2))
+                for i, label in enumerate(items):
+                    y = 2 + i
+                    if y >= max_y:
+                        break
+                    if i == selected[0]:
+                        stdscr.addnstr(y, 2, "▸ " + label, max_x - 4,
+                                       curses.A_REVERSE | curses.A_BOLD
+                                       | curses.color_pair(3))
+                    else:
+                        stdscr.addnstr(y, 2, "  " + label, max_x - 4)
+                fy = 2 + n + 1
+                for line in footer:
+                    if fy >= max_y:
+                        break
+                    stdscr.addnstr(fy, 2, line, max_x - 4, curses.color_pair(4))
+                    fy += 1
+                stdscr.refresh()
+
+            frame()
+
+            while True:
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q'), 27):
+                    selected[0] = -1
+                    break
+                elif key in (curses.KEY_UP, ord('k')):
+                    selected[0] = (selected[0] - 1) % n
+                    frame()
+                elif key in (curses.KEY_DOWN, ord('j')):
+                    selected[0] = (selected[0] + 1) % n
+                    frame()
+                elif key in (curses.KEY_ENTER, 10, 13):
+                    break
+                elif 49 <= key <= 57:  # '1'..'9'
+                    idx = key - 49
+                    if idx < n:
+                        selected[0] = idx
+                        break
+                elif key == 48 and n >= 10:  # '0'
+                    selected[0] = 0
+                    break
+            return selected[0]
+
+        return curses.wrapper(_run)
     
     def list_playlists(self):
         """List all playlists"""
         try:
             playlists = self.ytmusic.get_playlists()
-            self.ytmusic.print_playlists(playlists)
+            for p in playlists:
+                print(f"  {color.cyan(p['title'])}: {p['playlistId']}")
         except Exception as e:
-            print(f"Error listing playlists: {e}")
+            print(color.red(f"Error listing playlists: {e}"))
     
     def get_playlist_artists(self):
         """Get artists from a specific playlist"""
@@ -89,11 +106,11 @@ class CLI:
             playlists = self.ytmusic.get_playlists()
             playlist = self.ytmusic.get_playlist(playlists[1]["playlistId"])
             artists = self.ytmusic.get_playlist_artists(playlist)
-            print(playlist["title"])
+            print(color.cyan_bold(playlist["title"]))
             for artist in artists:
-                print(artist)
+                print(f"  {artist}")
         except Exception as e:
-            print(f"Error getting playlist artists: {e}")
+            print(color.red(f"Error getting playlist artists: {e}"))
 
     def move_tracks(self, out_path: str) -> None:
         data = {
@@ -102,7 +119,7 @@ class CLI:
             'errors': [],
         }
         
-        print('Exporting liked tracks from Yandex Music...')
+        print(color.cyan('Exporting liked tracks from Yandex Music...'))
         tracks = self.yamusic.export_liked_tracks()
         tracks.reverse()
 
@@ -112,7 +129,7 @@ class CLI:
                 'name': track.name
             })
 
-        print('Importing liked tracks to Youtube Music...')
+        print(color.cyan('Importing liked tracks to YouTube Music...'))
         not_found, errors = self.ytmusic.import_liked_tracks(tracks)
 
         for track in not_found:
@@ -120,19 +137,19 @@ class CLI:
                 'artist': track.artist,
                 'name': track.name
             })
-            print(f'Not found: {track.artist} - {track.name}')
-        
+            print(color.yellow(f'  Not found: {track.artist} - {track.name}'))
+
         for track in errors:
             data['errors'].append({
                 'artist': track.artist,
                 'name': track.name
             })
-            print(f'Error: {track.artist} - {track.name}')
-        
-        print(f'\nSummary: {len(tracks)} total tracks')
-        print(f'Successfully imported: {len(tracks) - len(not_found) - len(errors)}')
-        print(f'Not found: {len(not_found)} tracks')
-        print(f'Errors: {len(errors)} tracks')
+            print(color.red(f'  Error: {track.artist} - {track.name}'))
+
+        print(color.bold(f'\nSummary: {len(tracks)} total tracks'))
+        print(color.green(f'  Successfully imported: {len(tracks) - len(not_found) - len(errors)}'))
+        print(color.yellow(f'  Not found: {len(not_found)}'))
+        print(color.red(f'  Errors: {len(errors)}'))
 
         str_data = json.dumps(data, indent=2, ensure_ascii=False)
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -146,94 +163,47 @@ class CLI:
         else:
             print("Transfer cancelled.")
     
-    def handle_ytmusic_command(self, command):
-        """Handle YouTube Music specific commands"""
-        if command in ['1', 'list']:
-            self.list_playlists()
-        elif command in ['2', 'artists']:
-            self.get_playlist_artists()
-        elif command in ['3', 'tracks']:
-            tracks = self.ytmusic.get_track_out_playlist()
-            print(f"Found {len(tracks)} tracks in liked playlist")
-        elif command in ['4', 'print']:
-            tracks = self.ytmusic.get_track_out_playlist()
-            self.ytmusic.print_tracks(tracks)
-            print(f"Printed {len(tracks)} tracks to logs/tracks.txt")
-        elif command in ['5', 'playlist_map']:
-            self.ytmusic.update_playlists_map()
-        elif command in ['6', 'distribute']:
-            self.ytmusic.distribute_tracks()
-        elif command in ['7', 'download']:
-            self.ytmusic.download_all_playlists()
-        elif command in ['8', 'download_track']:
-            self.ytmusic.download_track("9zhK-QaEYZY")
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
-    
-    def handle_yamusic_command(self, command):
-        """Handle Yandex Music specific commands"""
-        if command in ['1', 'transfer']:
-            self.transfer_tracks()
-        elif command in ['2', 'download_playlists']:
-            self.yamusic.download_playlists()
-        elif command in ['3', 'download_liked']:
-            self.yamusic.download_like_tracks()
-        elif command in ['4', 'playlist_map']:
-            self.yamusic.playlist_map()
-        elif command in ['5', 'p']:
-            self.yamusic.check_tracks()
-        elif command in ['6', 'sync']:
-            self.yamusic.sync_playlists_from_yaml()
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
-    
     def buildin_ensure_login(self) -> bool:
         """Log in on demand before running a command that needs Buildin auth."""
         if self.buildin.is_authorized():
             return True
-        print("Buildin authorization is required for this command.")
+        print(color.yellow("Buildin authorization is required for this command."))
         return self.buildin_login()
     
     def buildin_login(self) -> bool:
         try:
             data = self.buildin.login()
         except BuildinError as e:
-            print(f"Buildin login failed: {e}")
+            print(color.red(f"Buildin login failed: {e}"))
             return False
         except Exception as e:
-            print(f"Buildin login failed: {type(e).__name__}: {e}")
+            print(color.red(f"Buildin login failed: {type(e).__name__}: {e}"))
             return False
-        
+
         expires_at = data.get("expires_at")
         if expires_at:
             expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
-            print(f"Logged in to Buildin MCP. Access token expires at {expires} (auto-refreshed).")
+            print(color.green(f"Logged in to Buildin MCP. Token expires at {expires} (auto-refreshed)."))
         else:
-            print("Logged in to Buildin MCP.")
+            print(color.green("Logged in to Buildin MCP."))
         return True
     
     def buildin_status(self):
         status = self.buildin.status()
-        print(f"MCP endpoint: {status['mcp_url']}")
-        print(f"Token file:   {status['token_file']}")
+        print(f"  MCP endpoint: {color.cyan(status['mcp_url'])}")
+        print(f"  Token file:   {status['token_file']}")
         if not status["authorized"]:
-            print("Status:       not authorized (use command 1 to log in)")
+            print(f"  Status:       {color.red('not authorized')} (run Log in first)")
             return
         if os.environ.get("BUILDIN_ACCESS_TOKEN"):
-            print("Status:       authorized via BUILDIN_ACCESS_TOKEN")
+            print(f"  Status:       {color.green('authorized')} via BUILDIN_ACCESS_TOKEN")
             return
         expires_at = status.get("expires_at")
         if expires_at:
             expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
-            print(f"Status:       authorized (token expires at {expires})")
+            print(f"  Status:       {color.green('authorized')} (token expires at {expires})")
         else:
-            print("Status:       authorized")
+            print(f"  Status:       {color.green('authorized')}")
     
     def buildin_tools(self):
         if not self.buildin_ensure_login():
@@ -241,21 +211,21 @@ class CLI:
         try:
             tools = self.buildin.list_tools()
         except BuildinError as e:
-            print(f"Could not list Buildin tools: {e}")
+            print(color.red(f"Could not list Buildin tools: {e}"))
             return
-        
+
         if not tools:
-            print("The Buildin MCP server exposes no tools.")
+            print(color.yellow("The Buildin MCP server exposes no tools."))
             return
-        
-        print(f"{len(tools)} Buildin MCP tools:")
+
+        print(color.bold(f"\n{len(tools)} Buildin MCP tools:"))
         for tool in tools:
-            name = tool.get("name", "?")
+            name = color.cyan(tool.get("name", "?"))
             description = " ".join((tool.get("description") or "").split())
             if description:
-                print(f"  - {name}: {description[:140]}")
+                print(f"  {name}  {description[:140]}")
             else:
-                print(f"  - {name}")
+                print(f"  {name}")
     
     def buildin_call_tool(self):
         if not self.buildin_ensure_login():
@@ -279,9 +249,9 @@ class CLI:
         try:
             result = self.buildin.call_tool(name, arguments)
         except BuildinError as e:
-            print(f"Buildin tool call failed: {e}")
+            print(color.red(f"Buildin tool call failed: {e}"))
             return
-        
+
         self.print_tool_result(result)
     
     def print_tool_result(self, result):
@@ -300,165 +270,196 @@ class CLI:
     
     def buildin_logout(self):
         self.buildin.logout()
-        print("Buildin tokens removed.")
+        print(color.green("Buildin tokens removed."))
     
     def buildin_export_maps(self):
         if not self.buildin_ensure_login():
             return
-        print("Exporting local playlist maps to Buildin...")
+        print(color.cyan("Exporting local playlist maps to Buildin..."))
         try:
             result = export_maps(self.buildin)
         except MapSyncError as e:
-            print(f"Buildin export failed: {e}")
+            print(color.red(f"Buildin export failed: {e}"))
             return
-        
-        print(f"Page:     {result['page_id']}")
-        print(f"Database: {result['database_id']}")
+
+        print(f"  Page:     {color.cyan(result['page_id'])}")
+        print(f"  Database: {color.cyan(result['database_id'])}")
         print(
-            f"Records:  {result['created']} created, {result['updated']} updated, "
+            f"  Records:  {color.green(str(result['created']))} created, "
+            f"{color.yellow(str(result['updated']))} updated, "
             f"{result['unchanged']} unchanged (total {result['total']})"
         )
         if result["orphaned"]:
-            print("Orphaned in Buildin (no local counterpart; delete manually in the UI):")
+            print(color.yellow("\nOrphaned in Buildin (delete manually in the UI):"))
             for platform, title in result["orphaned"]:
-                print(f"  - {platform}: {title}")
+                print(f"  {color.yellow(platform)}: {title}")
     
     def buildin_import_maps(self):
         if not self.buildin_ensure_login():
             return
-        print("Reading playlist maps from Buildin...")
+        print(color.cyan("Reading playlist maps from Buildin..."))
         try:
             result = import_maps(self.buildin)
         except MapSyncError as e:
-            print(f"Buildin import failed: {e}")
+            print(color.red(f"Buildin import failed: {e}"))
             return
-        
+
         print(
-            f"Records: {result['records']} | YouTube: {len(result['youtube'])} | "
-            f"Yandex: {len(result['yandex'])}"
+            f"  Records: {result['records']}  |  "
+            f"YouTube: {color.cyan(str(len(result['youtube'])))}  |  "
+            f"Yandex: {color.cyan(str(len(result['yandex'])))}"
         )
         for platform, key in (("YouTube", "youtube_diff"), ("Yandex", "yandex_diff")):
             diff = result[key]
             print(
-                f"{platform} changes vs local: +{len(diff['added'])} "
-                f"-{len(diff['removed'])} ~{len(diff['changed'])}"
+                f"  {platform} changes: "
+                f"+{color.green(str(len(diff['added'])))} "
+                f"-{color.red(str(len(diff['removed'])))} "
+                f"~{color.yellow(str(len(diff['changed'])))}"
             )
             for label in ("added", "removed", "changed"):
+                colors = {"added": color.green, "removed": color.red, "changed": color.yellow}
+                c = colors[label]
                 values = diff[label]
                 for value in values[:10]:
-                    print(f"  {label}: {value}")
+                    print(f"    {c(label)}: {value}")
                 if len(values) > 10:
-                    print(f"  ... {len(values) - 10} more {label}")
-        
+                    print(f"    ... {len(values) - 10} more {label}")
+
         if not result["youtube"]:
-            print("No YouTube records in Buildin — data/playlists_map.yaml will be kept.")
+            print(color.yellow("No YouTube records — data/playlists_map.yaml will be kept."))
         if not result["yandex"]:
-            print("No Yandex records in Buildin — data/yamusic.yaml will be kept.")
+            print(color.yellow("No Yandex records — data/yamusic.yaml will be kept."))
         if not result["youtube"] and not result["yandex"]:
             return
-        
-        confirm = input("\nOverwrite local YAML maps with the Buildin data? (y/n): ")
+
+        confirm = input(color.bold("\nOverwrite local YAML maps with the Buildin data? (y/n): "))
         if confirm.strip().lower() not in ("y", "yes"):
-            print("Import cancelled.")
+            print(color.yellow("Import cancelled."))
             return
-        
+
         written = write_imported_maps(result)
-        print("Written:")
+        print(color.green("Written:"))
         for path in written:
-            print(f"  {path} (backup: {path}.bak)")
+            print(f"  {path}  (backup: {path}.bak)")
     
-    def handle_buildin_command(self, command):
-        """Handle Buildin AI specific commands"""
-        if command in ['1', 'login']:
-            self.buildin_login()
-        elif command in ['2', 'status']:
-            self.buildin_status()
-        elif command in ['3', 'tools']:
-            self.buildin_tools()
-        elif command in ['4', 'call']:
-            self.buildin_call_tool()
-        elif command in ['5', 'logout']:
-            self.buildin_logout()
-        elif command in ['6', 'export_maps', 'export-maps']:
-            self.buildin_export_maps()
-        elif command in ['7', 'import_maps', 'import-maps']:
-            self.buildin_import_maps()
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
-    
+    # Menu items — labels only, order = selection index
+    YT_MENU = [
+        "List playlists",
+        "Playlist artists",
+        "Tracks out of playlist",
+        "Print tracks to file",
+        "Update playlist map",
+        "Distribute tracks",
+        "Download all playlists",
+        "Download track",
+    ]
+    YA_MENU = [
+        "Transfer to YouTube Music",
+        "Download playlists",
+        "Download liked tracks",
+        "Get playlist map",
+        "Remove broken liked tracks",
+        "Sync playlists from YAML",
+    ]
+    BUILDIN_MENU = [
+        "Log in",
+        "Status",
+        "List MCP tools",
+        "Call MCP tool",
+        "Log out",
+        "Export maps",
+        "Import maps",
+    ]
+
     def run(self):
         """Main CLI loop"""
-        print("\n" + "="*50)
-        print("YouTube Music / Yandex Music / Buildin AI CLI")
-        print("="*50)
-        
+        print(color.cyan_bold("  Music Library CLI"))
+
         while self.running:
             try:
                 # Mode selection
                 if self.mode is None:
-                    self.print_mode_selection()
-                    mode_input = input("\nSelect mode (1/2/3): ").strip().lower()
-                    
-                    if mode_input in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
+                    idx = self._select("Select API Mode",
+                                       ["YouTube Music", "Yandex Music", "Buildin AI"],
+                                       back_label="Exit")
+                    if idx == -1:
+                        print("\n" + color.cyan("Goodbye!"))
                         self.running = False
                         break
-                    elif mode_input in ['1', 'yt', 'ytmusic']:
-                        self.mode = 'ytmusic'
-                        print("\nSwitched to YouTube Music mode")
-                        self.print_ytmusic_menu()
-                    elif mode_input in ['2', 'ya', 'yamusic']:
-                        self.mode = 'yamusic'
-                        print("\nSwitched to Yandex Music mode")
-                        self.print_yamusic_menu()
-                    elif mode_input in ['3', 'buildin', 'ai']:
-                        self.mode = 'buildin'
-                        print("\nSwitched to Buildin AI mode")
-                        self.print_buildin_menu()
-                    else:
-                        print("Invalid mode selection. Please choose 1, 2 or 3.")
-                
+                    self.mode = ['ytmusic', 'yamusic', 'buildin'][idx]
+
                 # YouTube Music mode
                 elif self.mode == 'ytmusic':
-                    command = input("\n[YTMusic] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_ytmusic_menu()
-                    else:
-                        self.handle_ytmusic_command(command)
-                
+                    idx = self._select("YouTube Music", self.YT_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_yt(idx)
+
                 # Yandex Music mode
                 elif self.mode == 'yamusic':
-                    command = input("\n[YaMusic] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_yamusic_menu()
-                    else:
-                        self.handle_yamusic_command(command)
-                
+                    idx = self._select("Yandex Music", self.YA_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_ya(idx)
+
                 # Buildin AI mode
                 elif self.mode == 'buildin':
-                    command = input("\n[Buildin] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_buildin_menu()
-                    else:
-                        self.handle_buildin_command(command)
-            
+                    idx = self._select("Buildin AI", self.BUILDIN_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_buildin(idx)
+
             except KeyboardInterrupt:
-                print("\n\nGoodbye!")
+                print("\n\n" + color.cyan("Goodbye!"))
                 self.running = False
             except Exception as e:
-                print(f"Error: {e}")
+                print(color.red(f"\nError: {e}\n"))
+
+    @staticmethod
+    def _pause() -> None:
+        """Wait for Enter / space / any key before returning to the menu."""
+        print()
+        input(color.yellow("Press Enter to continue..."))
+
+    def _dispatch_yt(self, idx: int):
+        cmds = [
+            self.list_playlists,
+            self.get_playlist_artists,
+            lambda: print(f"Found {len(self.ytmusic.get_track_out_playlist())} tracks"),
+            lambda: self.ytmusic.print_tracks(self.ytmusic.get_track_out_playlist()),
+            self.ytmusic.update_playlists_map,
+            self.ytmusic.distribute_tracks,
+            self.ytmusic.download_all_playlists,
+            lambda: self.ytmusic.download_track("9zhK-QaEYZY"),
+        ]
+        cmds[idx]()
+        self._pause()
+
+    def _dispatch_ya(self, idx: int):
+        cmds = [
+            self.transfer_tracks,
+            self.yamusic.download_playlists,
+            self.yamusic.download_like_tracks,
+            self.yamusic.playlist_map,
+            self.yamusic.check_tracks,
+            self.yamusic.sync_playlists_from_yaml,
+        ]
+        cmds[idx]()
+        self._pause()
+
+    def _dispatch_buildin(self, idx: int):
+        cmds = [
+            self.buildin_login,
+            self.buildin_status,
+            self.buildin_tools,
+            self.buildin_call_tool,
+            self.buildin_logout,
+            self.buildin_export_maps,
+            self.buildin_import_maps,
+        ]
+        cmds[idx]()
+        self._pause()
