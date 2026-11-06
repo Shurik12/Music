@@ -17,63 +17,71 @@ class CLI:
         self.mode = None  # 'ytmusic', 'yamusic' or 'buildin'
         
     @staticmethod
-    def _print_menu(title: str, items: list[tuple[str, str]],
-                    extra: list[str] | None = None) -> None:
-        """Render a numbered menu with aligned labels.
+    def _select(title: str, items: list[str],
+               back_label: str = "Back") -> int:
+        """Interactive curses menu. Returns 0-based index, or -1 for back/quit."""
+        import curses
 
-        items: list of (key, label) pairs.
-        extra: optional footer lines (e.g. "b, back - Return to mode selection").
-        """
-        width = max(len(label) for _, label in items) + 2
-        print(f"\n{title}")
-        print("-" * 40)
-        for key, label in items:
-            print(f"  {key}. {label.ljust(width)}")
-        if extra:
-            print("-" * 40)
-            for line in extra:
-                print(f"  {line}")
-        print("-" * 40)
+        footer = [f"{back_label}  ·  q / esc to {back_label.lower()}",
+                  "↑/↓ move  ·  enter select  ·  1-N quick pick"]
 
-    def print_mode_selection(self):
-        self._print_menu("Select API Mode", [
-            ("1", "YouTube Music"),
-            ("2", "Yandex Music"),
-            ("3", "Buildin AI"),
-        ], extra=["q / quit / exit - Exit program"])
+        def _run(stdscr) -> int:
+            curses.curs_set(0)
+            stdscr.keypad(True)
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_YELLOW, -1)
 
-    def print_ytmusic_menu(self):
-        self._print_menu("YouTube Music Commands", [
-            ("1", "List playlists"),
-            ("2", "Playlist artists"),
-            ("3", "Tracks out of playlist"),
-            ("4", "Print tracks to file"),
-            ("5", "Update playlist map"),
-            ("6", "Distribute tracks"),
-            ("7", "Download all playlists"),
-            ("8", "Download track"),
-        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
+            selected = [0]
+            n = len(items)
 
-    def print_yamusic_menu(self):
-        self._print_menu("Yandex Music Commands", [
-            ("1", "Transfer to YouTube Music"),
-            ("2", "Download playlists"),
-            ("3", "Download liked tracks"),
-            ("4", "Get playlist map"),
-            ("5", "Remove broken liked tracks"),
-            ("6", "Sync playlists from YAML"),
-        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
+            def frame() -> None:
+                stdscr.erase()
+                max_y, max_x = stdscr.getmaxyx()
+                stdscr.addnstr(0, 2, title, max_x - 4, curses.A_BOLD | curses.color_pair(1))
+                stdscr.addnstr(1, 2, "─" * (max_x - 4), max_x - 4)
+                for i, label in enumerate(items):
+                    y = 2 + i
+                    if y >= max_y:
+                        break
+                    if i == selected[0]:
+                        stdscr.addnstr(y, 2, "▸ " + label, max_x - 4,
+                                       curses.A_REVERSE | curses.A_BOLD)
+                    else:
+                        stdscr.addnstr(y, 2, "  " + label, max_x - 4)
+                fy = 2 + n + 1
+                for line in footer:
+                    if fy >= max_y:
+                        break
+                    stdscr.addnstr(fy, 2, line, max_x - 4)
+                    fy += 1
+                stdscr.refresh()
 
-    def print_buildin_menu(self):
-        self._print_menu("Buildin AI Commands", [
-            ("1", "Log in"),
-            ("2", "Status"),
-            ("3", "List MCP tools"),
-            ("4", "Call MCP tool"),
-            ("5", "Log out"),
-            ("6", "Export maps"),
-            ("7", "Import maps"),
-        ], extra=["b / back - Mode selection", "q / quit / exit - Exit program"])
+            frame()
+
+            while True:
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q'), 27):
+                    selected[0] = -1
+                    break
+                elif key in (curses.KEY_UP, ord('k')):
+                    selected[0] = (selected[0] - 1) % n
+                    frame()
+                elif key in (curses.KEY_DOWN, ord('j')):
+                    selected[0] = (selected[0] + 1) % n
+                    frame()
+                elif key in (curses.KEY_ENTER, 10, 13):
+                    break
+                elif 49 <= key <= 57:  # '1'..'9'
+                    idx = key - 49
+                    if idx < n:
+                        selected[0] = idx
+                        break
+                elif key == 48 and n >= 10:  # '0'
+                    selected[0] = 0
+                    break
+            return selected[0]
+
+        return curses.wrapper(_run)
     
     def list_playlists(self):
         """List all playlists"""
@@ -145,53 +153,6 @@ class CLI:
             self.move_tracks(self.args.output)
         else:
             print("Transfer cancelled.")
-    
-    def handle_ytmusic_command(self, command):
-        """Handle YouTube Music specific commands"""
-        if command in ['1', 'list']:
-            self.list_playlists()
-        elif command in ['2', 'artists']:
-            self.get_playlist_artists()
-        elif command in ['3', 'tracks']:
-            tracks = self.ytmusic.get_track_out_playlist()
-            print(f"Found {len(tracks)} tracks in liked playlist")
-        elif command in ['4', 'print']:
-            tracks = self.ytmusic.get_track_out_playlist()
-            self.ytmusic.print_tracks(tracks)
-            print(f"Printed {len(tracks)} tracks to logs/tracks.txt")
-        elif command in ['5', 'playlist_map']:
-            self.ytmusic.update_playlists_map()
-        elif command in ['6', 'distribute']:
-            self.ytmusic.distribute_tracks()
-        elif command in ['7', 'download']:
-            self.ytmusic.download_all_playlists()
-        elif command in ['8', 'download_track']:
-            self.ytmusic.download_track("9zhK-QaEYZY")
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
-    
-    def handle_yamusic_command(self, command):
-        """Handle Yandex Music specific commands"""
-        if command in ['1', 'transfer']:
-            self.transfer_tracks()
-        elif command in ['2', 'download_playlists']:
-            self.yamusic.download_playlists()
-        elif command in ['3', 'download_liked']:
-            self.yamusic.download_like_tracks()
-        elif command in ['4', 'playlist_map']:
-            self.yamusic.playlist_map()
-        elif command in ['5', 'p']:
-            self.yamusic.check_tracks()
-        elif command in ['6', 'sync']:
-            self.yamusic.sync_playlists_from_yaml()
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
     
     def buildin_ensure_login(self) -> bool:
         """Log in on demand before running a command that needs Buildin auth."""
@@ -367,97 +328,114 @@ class CLI:
         for path in written:
             print(f"  {path} (backup: {path}.bak)")
     
-    def handle_buildin_command(self, command):
-        """Handle Buildin AI specific commands"""
-        if command in ['1', 'login']:
-            self.buildin_login()
-        elif command in ['2', 'status']:
-            self.buildin_status()
-        elif command in ['3', 'tools']:
-            self.buildin_tools()
-        elif command in ['4', 'call']:
-            self.buildin_call_tool()
-        elif command in ['5', 'logout']:
-            self.buildin_logout()
-        elif command in ['6', 'export_maps', 'export-maps']:
-            self.buildin_export_maps()
-        elif command in ['7', 'import_maps', 'import-maps']:
-            self.buildin_import_maps()
-        elif command in ['b', 'back']:
-            self.mode = None
-            print("Returning to mode selection...")
-        else:
-            print("Unknown command. Type 'help' to see available commands.")
-    
+    # Menu items — labels only, order = selection index
+    YT_MENU = [
+        "List playlists",
+        "Playlist artists",
+        "Tracks out of playlist",
+        "Print tracks to file",
+        "Update playlist map",
+        "Distribute tracks",
+        "Download all playlists",
+        "Download track",
+    ]
+    YA_MENU = [
+        "Transfer to YouTube Music",
+        "Download playlists",
+        "Download liked tracks",
+        "Get playlist map",
+        "Remove broken liked tracks",
+        "Sync playlists from YAML",
+    ]
+    BUILDIN_MENU = [
+        "Log in",
+        "Status",
+        "List MCP tools",
+        "Call MCP tool",
+        "Log out",
+        "Export maps",
+        "Import maps",
+    ]
+
     def run(self):
         """Main CLI loop"""
         print("Music Library CLI")
-        print("Music Library CLI".center(40, "-"))
 
         while self.running:
             try:
                 # Mode selection
                 if self.mode is None:
-                    self.print_mode_selection()
-                    mode_input = input("\nSelect mode (1/2/3): ").strip().lower()
-                    
-                    if mode_input in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
+                    idx = self._select("Select API Mode",
+                                       ["YouTube Music", "Yandex Music", "Buildin AI"],
+                                       back_label="Exit")
+                    if idx == -1:
+                        print("\nGoodbye!")
                         self.running = False
                         break
-                    elif mode_input in ['1', 'yt', 'ytmusic']:
-                        self.mode = 'ytmusic'
-                        print("\nSwitched to YouTube Music mode")
-                        self.print_ytmusic_menu()
-                    elif mode_input in ['2', 'ya', 'yamusic']:
-                        self.mode = 'yamusic'
-                        print("\nSwitched to Yandex Music mode")
-                        self.print_yamusic_menu()
-                    elif mode_input in ['3', 'buildin', 'ai']:
-                        self.mode = 'buildin'
-                        print("\nSwitched to Buildin AI mode")
-                        self.print_buildin_menu()
-                    else:
-                        print("Invalid mode selection. Please choose 1, 2 or 3.")
-                
+                    self.mode = ['ytmusic', 'yamusic', 'buildin'][idx]
+
                 # YouTube Music mode
                 elif self.mode == 'ytmusic':
-                    command = input("\n[YTMusic] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_ytmusic_menu()
-                    else:
-                        self.handle_ytmusic_command(command)
-                
+                    idx = self._select("YouTube Music", self.YT_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_yt(idx)
+
                 # Yandex Music mode
                 elif self.mode == 'yamusic':
-                    command = input("\n[YaMusic] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_yamusic_menu()
-                    else:
-                        self.handle_yamusic_command(command)
-                
+                    idx = self._select("Yandex Music", self.YA_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_ya(idx)
+
                 # Buildin AI mode
                 elif self.mode == 'buildin':
-                    command = input("\n[Buildin] Enter command (or 'help' for menu): ").strip().lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("Goodbye!")
-                        self.running = False
-                    elif command in ['help', '?', '']:
-                        self.print_buildin_menu()
-                    else:
-                        self.handle_buildin_command(command)
-            
+                    idx = self._select("Buildin AI", self.BUILDIN_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_buildin(idx)
+
             except KeyboardInterrupt:
                 print("\n\nGoodbye!")
                 self.running = False
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"\nError: {e}\n")
+
+    def _dispatch_yt(self, idx: int):
+        cmds = [
+            self.list_playlists,
+            self.get_playlist_artists,
+            lambda: print(f"Found {len(self.ytmusic.get_track_out_playlist())} tracks"),
+            lambda: self.ytmusic.print_tracks(self.ytmusic.get_track_out_playlist()),
+            self.ytmusic.update_playlists_map,
+            self.ytmusic.distribute_tracks,
+            self.ytmusic.download_all_playlists,
+            lambda: self.ytmusic.download_track("9zhK-QaEYZY"),
+        ]
+        cmds[idx]()
+
+    def _dispatch_ya(self, idx: int):
+        cmds = [
+            self.transfer_tracks,
+            self.yamusic.download_playlists,
+            self.yamusic.download_like_tracks,
+            self.yamusic.playlist_map,
+            self.yamusic.check_tracks,
+            self.yamusic.sync_playlists_from_yaml,
+        ]
+        cmds[idx]()
+
+    def _dispatch_buildin(self, idx: int):
+        cmds = [
+            self.buildin_login,
+            self.buildin_status,
+            self.buildin_tools,
+            self.buildin_call_tool,
+            self.buildin_logout,
+            self.buildin_export_maps,
+            self.buildin_import_maps,
+        ]
+        cmds[idx]()
