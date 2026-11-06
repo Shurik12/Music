@@ -67,14 +67,14 @@ class YaMusicHandle:
             return []
         
     def get_playlist_artists(self, playlist: Playlist) -> Set[str]:
-        artists = set()
+        artists: Set[str] = set()
         try:
             tracks = playlist.fetch_tracks()
             for track in tracks:
                 for artist in track.track.artists:
                     artists.add(artist.name)
-        except:
-            artists = set()
+        except Exception as e:
+            print(f"  Warning: could not fetch artists: {e}")
         return artists
         
     def print_playlists(self):
