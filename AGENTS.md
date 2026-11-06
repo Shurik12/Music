@@ -22,13 +22,8 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 
 | File | Role |
 |------|------|
-| `main.py` | Thin `app()` wrapper around the Typer app in `src/cli.py`; catches `Ctrl+C` (exit 0). |
-| `src/cli.py` | Typer root app: `@app.callback()` does `paths.ensure_directories()` → `setup_logging()` → `load_config()` → builds `CliContext` → stores on `ctx.obj`. Mounts the three sub-apps. |
-| `src/cli_ytmusic.py` | Typer sub-commands for YouTube Music (formerly the `ytmusic` menu). |
-| `src/cli_yamusic.py` | Typer sub-commands for Yandex Music (formerly the `yamusic` menu). |
-| `src/cli_buildin.py` | Typer sub-commands for Buildin AI (formerly the `buildin` menu). |
-| `src/cli_base.py` | `CliContext` dataclass + `get_context` / `require_context` helpers shared by sub-commands. |
-| `src/args.py` | `LogLevel` enum used by the `--log-level` Typer option (was `parse_args`; no more argparse). |
+| `main.py` | Entry point: `parse_args` → `setup_logging` → loads `config/config.yaml` → `config["token"]` + `ytmusic_download_dir` (default `downloads`, relative paths anchored to the repo root) → `YaMusicHandle` + `YTMusicClient` → `CLI.run()`. Relative `--output` is redirected into `logs/` (main.py:30). Also calls `paths.ensure_directories()`. |
+| `src/cli.py` | Interactive menu loop (`CLI`, src/cli.py:6). Mode select → YT or Ya menu → dispatch to clients. Contains hardcoded demo values (see Gotchas). |
 | `src/paths.py` | Single source of truth for all filesystem paths (`PROJECT_ROOT`, `CONFIG_DIR`, `DATA_DIR`, `DOWNLOAD_DIR`, `LOGS_DIR`, config/auth/map files, `resolve*` helpers). Paths are anchored to the repo root, never to the CWD. |
 | `src/yamusic.py` | `YaMusicHandle`: liked-track export, playlist map generation, Yandex playlist sync/CRUD, Yandex downloads (uses `yandex_music` built-in downloader). |
 | `src/ytmusic.py` | `YTMusicClient`: `ytmusicapi` wrapper — search/like import, playlist CRUD, "tracks out of playlist" detection, yt-dlp MP3 downloads, per-playlist `track_map_*.yaml`. Also configures logging **at import time**. |
@@ -54,19 +49,20 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 
 ## Gotchas
 
-- **Typer-based CLI.** The old interactive menu loop (`CLI.run()`) is gone. Every command is a Typer sub-command under `ytmusic` / `yamusic` / `buildin`. Global flags (`--config`, `--output`, `--no-proxy`, `--proxy-port`, `--log-level`, `--log-file`) are accepted before or after the sub-command.
-- **Startup cost.** The Typer `@app.callback()` (src/cli.py) runs before *every* sub-command, including `--help` on a sub-command. It calls `paths.ensure_directories()`, sets up logging, loads config, and **initialises all three clients** (including the live Yandex API call and the YouTube `_check_auth` probe). To skip client init, don't run a sub-command — `uv run main.py --help` exits before the callback runs.
+- **Interactive only.** All flows require `input()`; there is no non-interactive mode. Do not launch the CLI expecting pipeable output.
 - **Import-time side effects.** `import src.ytmusic` creates `logs/` (at the repo root) and a `logs/download_log_<ts>.log` file immediately (src/ytmusic.py:14-37).
 - **Auth is checked at startup.** `YTMusicClient.__init__` runs `_check_auth()` (src/ytmusic.py:91) and warns — without aborting — when `config/browser.json` is expired (account endpoints then silently return logged-out/empty data) or cannot be verified (network/proxy down).
 - **yt-dlp failures are logged, not silent.** `download_track` (src/ytmusic.py:470) passes a custom `YtdlpLogger` (src/ytmusic.py:41) so yt-dlp errors/warnings land in `logs/download_log_<ts>.log`, and returns `None` when yt-dlp fails or the output file was not created. Its opts also set `js_runtimes` (node ≥20 or deno) and `remote_components: ['ejs:github']` — YouTube requires a JS runtime plus the EJS solver script (fetched from GitHub once, then cached).
+- **Hardcoded demo values in `cli.py`** — change these when touching those commands:
+  - YT command 2 uses `playlists[1]` (src/cli.py:68)
+  - YT command 8 downloads video `9zhK-QaEYZY` (src/cli.py:147)
 - **Proxy is hardcoded** to `socks5://127.0.0.1:1080` in two places in `src/ytmusic.py` (API session ~line 78, yt-dlp opts ~line 509). `--no-proxy`/`--proxy-port` are parsed and logged but never wired; `--log-file` is parsed and unused.
-- **Destructive commands exist.** `yamusic check-tracks` removes broken liked tracks; `yamusic sync-from-yaml` clears each `data/yamusic.yaml` playlist before repopulating; `yamusic transfer` unlikes and re-likes tracks on YouTube. All prompt for `y/n` unless `--yes` is passed. Never trigger these in a test/demo without explicit user consent.
-- **Confirmation prompts.** Destructive commands (`yamusic transfer`, `yamusic check-tracks`, `yamusic sync-from-yaml`, `buildin import-maps`) use `typer.confirm()` and accept `--yes`/`-y` to skip.
-- **Transfer reverses order** before importing (src/cli_yamusic.py `transfer`) to mirror Yandex like chronology.
-- **`config/config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads, relative to the repo root). `config/ex_config.yaml` is the tracked template; the Typer callback does `config["token"]` and will KeyError on other shapes.
+- **Destructive commands exist.** Yandex menu 5 removes broken liked tracks; menu 6 clears each `data/yamusic.yaml` playlist before repopulating. Never trigger these in a test/demo without explicit user consent.
+- **Transfer reverses order** before importing (src/cli.py:85) to mirror Yandex like chronology.
+- **`config/config.yaml` schema is flat** (`token: ...`, optional `ytmusic_download_dir: <path>` for YouTube Music downloads, relative to the repo root). `config/ex_config.yaml` is the tracked template; `main.py` does `config["token"]` and will KeyError on other shapes.
 - **`src/yamusic.py:76`** has a bare `except` that swallows all errors in `get_playlist_artists` — be aware when debugging missing artists.
 - **Legacy fallback:** `config.yaml` / `browser.json` left in the repo root are still picked up (with a warning) by `paths.resolve_config()` / `paths.browser_auth_file()`. New code should use `config/` only.
-- **Buildin client is lazy and generic.** `BuildinClient` (src/buildin.py:130) makes no network calls until `login()` / `list_tools()` / `call_tool()`. `src/cli_buildin.py` exposes `login`/`status`/`tools`/`call`/`logout` plus `export-maps`/`import-maps`; deeper music workflows go in a new module that composes both clients. OAuth requires a browser and a temporary `127.0.0.1` callback (5 min timeout). Tokens live in `config/buildin_tokens.json` (0600, gitignored). `BUILDIN_ACCESS_TOKEN` overrides the stored token for headless use/tests.
+- **Buildin client is lazy and generic.** `BuildinClient` (src/buildin.py:130) makes no network calls until `login()` / `list_tools()` / `call_tool()`. `src/cli.py` exposes login/status/list/call/logout plus the playlist-map sync; deeper music workflows go in a new module that composes both clients. OAuth requires a browser and a temporary `127.0.0.1` callback (5 min timeout). Tokens live in `config/buildin_tokens.json` (0600, gitignored). `BUILDIN_ACCESS_TOKEN` overrides the stored token for headless use/tests.
 - **Buildin map sync is source-of-truth by database.** `src/buildin_maps.py` stores one record per playlist in the `Music Library → Playlists` database (`Title`, `Platform`, `External ID`, `Artists` newline-separated). Property names are matched exactly — renaming `Platform`/`External ID`/`Artists` breaks import. Buildin has no record-deletion tool: locally removed playlists stay as orphans and must be deleted in the UI, otherwise they reappear on import. Import keeps a platform's YAML file when Buildin has zero records for it. IDs cache: `config/buildin_music.json` (delete to rediscover).
 - **MCP transport quirks:** responses may be `application/json` or `text/event-stream`; the client handles both. It refreshes once on HTTP 401 and re-initializes the session once on HTTP 404. If you add tool calls, keep those retries in mind.
 
@@ -83,12 +79,12 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 
 | Task | Touch |
 |------|-------|
-| New Typer sub-command | `src/cli_ytmusic.py` / `src/cli_yamusic.py` / `src/cli_buildin.py` (add a `@<sub>.command(...)`) + the relevant client module |
-| New global flag | `@app.callback()` in `src/cli.py` (add the option, thread it through `CliContext.args`) |
+| New menu command | `src/cli.py` (menu printer + handler) + `src/yamusic.py` or `src/ytmusic.py` |
 | New Yandex API action | `src/yamusic.py` |
 | New YouTube API / download action | `src/ytmusic.py` |
+| New CLI flag | `src/args.py`, then wire it in `main.py` (and actually pass it to clients — see proxy gotcha) |
 | New file / output location | `src/paths.py`, then reference the constant (never a bare relative path) |
-| New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli_buildin.py` for the UI |
+| New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli.py` Buildin helpers (src/cli.py:193-387) for the UI |
 | Change Buildin map fields/format | `src/buildin_maps.py` (`_record_properties`, `_records_to_maps`, `_parse_artists`) + README database-schema section |
 | Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:391) for YT, `sync_playlists_from_yaml` (src/yamusic.py:191) for Ya |
 

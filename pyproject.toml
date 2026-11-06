@@ -11,6 +11,4 @@ dependencies = [
     "pyyaml",
     "requests[socks]",
     "yt-dlp",
-    "typer>=0.12",
-    "rich>=13.0.0",
 ]
