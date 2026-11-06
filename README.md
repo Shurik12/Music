@@ -186,13 +186,14 @@ main.py                 Entry point: parse args, logging, init clients, start CL
 src/cli.py              Interactive menu loop and command dispatch
 src/yamusic.py          Yandex Music client (transfer, downloads, playlist sync)
 src/ytmusic.py          YouTube Music client (ytmusicapi + yt-dlp downloads)
+src/color.py            ANSI color helpers (auto-disabled by NO_COLOR=1)
 src/track.py            Track named tuple (artist, name)
 src/buildin.py          Buildin.ai MCP client (OAuth login, tool calls)
 src/buildin_maps.py     Playlist-map sync with a Buildin database
 src/paths.py            Project-wide path constants (anchored to the repo root)
 src/config.py           YAML config loader
 src/args.py             argparse definitions
-src/logger.py           Logging setup (console + file)
+src/logger.py           File-only logging setup
 config/config.yaml      Yandex token + settings (gitignored)
 config/ex_config.yaml   Example config template
 config/browser.json     YouTube Music browser auth (sensitive!, gitignored)

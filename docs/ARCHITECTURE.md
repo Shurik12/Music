@@ -29,7 +29,10 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 | `DOWNLOAD_DIR` | `<root>/downloads` |
 | `LOGS_DIR` | `<root>/logs` |
 | `DEFAULT_CONFIG_FILE` | `config/config.yaml` |
+| `EXAMPLE_CONFIG_FILE` | `config/ex_config.yaml` |
 | `BROWSER_AUTH_FILE` | `config/browser.json` |
+| `BUILDIN_TOKENS_FILE` | `config/buildin_tokens.json` |
+| `BUILDIN_STATE_FILE` | `config/buildin_music.json` |
 | `PLAYLISTS_MAP_FILE` | `data/playlists_map.yaml` |
 | `YAMUSIC_MAP_FILE` | `data/yamusic.yaml` |
 
@@ -39,13 +42,13 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 
 1. `main.py:22` calls `paths.ensure_directories()` → creates `config/`, `data/`, `downloads/`, `logs/` at the repo root.
 2. `parse_args()` (src/args.py:4) — see flags in COMMANDS.md.
-3. Relative `--output` is rebased into `logs/` (main.py:30-31).
+3. `--output` is always resolved via `paths.resolve()` (main.py:32).
 4. `setup_logging()` (src/logger.py:9) — root logger → **file only** `logs/music_api_<ts>.log` (no console output).
-5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py:57` uses `config["token"]`.
+5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py` uses `config["token"]`.
 6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
-7. `YTMusicClient()` (src/ytmusic.py:72) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:91), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable.
+7. `YTMusicClient()` (src/ytmusic.py:55) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:89), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable. The download log file is created per instance by `_setup_download_logger()` (src/ytmusic.py:72).
 8. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
-9. `CLI(yamusic, ytmusic, buildin, args).run()` (src/cli.py:320) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
+9. `CLI(yamusic, ytmusic, buildin, args).run()` (src/cli.py:407) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
 
 Any exception in startup is caught in `main.py:83`, logged with traceback, exit code 1.
 
@@ -59,7 +62,7 @@ Wraps a single `yandex_music.Client`. Methods:
 |--------|------|---------|
 | `export_liked_tracks()` | 16 | Fetches all liked tracks, resolves each short track to a full `Track`; skips (and counts) broken ones with progress bars. |
 | `get_playlists()` | 61 | `users_playlists_list()` with error swallowing. |
-| `get_playlist_artists(playlist)` | 69 | Set of artist names in a playlist; bare `except` returns empty set. |
+| `get_playlist_artists(playlist)` | 69 | Set of artist names in a playlist; catches `Exception` and prints a warning, returns empty set. |
 | `print_playlists()` | 80 | Debug print of title + kind. |
 | `playlist_map(output_file)` | 85 | Writes `title → {kind, artists}` YAML to `data/temp_playlist_map.yaml` by default (used by Ya menu 4). |
 | `create_playlist()` | 114 | Demo: creates a "Test" playlist. |
@@ -70,17 +73,18 @@ Wraps a single `yandex_music.Client`. Methods:
 | `download_playist(playlist)` | 172 | Resolves short tracks to full tracks, then `download_tracks` (note: method name has a typo upstream). |
 | `download_playlists()` | 179 | Loop over all playlists. |
 | `download_like_tracks()` | 184 | Liked tracks → `<root>/downloads/Like/`. |
-| `sync_playlists_from_yaml(file)` | 191 | See flow 6 below; defaults to `data/yamusic.yaml`. |
-| `check_tracks()` | 308 | See flow 7 below. |
+| `sync_playlists_from_yaml(file)` | 193 | See flow 6 below; defaults to `data/yamusic.yaml`. |
+| `check_tracks()` | 310 | See flow 7 below. |
 
 ### src/ytmusic.py — `YTMusicClient`
 
-Wraps `ytmusicapi.YTMusic` plus yt-dlp. **Module import has side effects**: configures a module logger writing `logs/download_log_<ts>.log` (lines 14-37); `file_logger` writes file-only, console only ≥WARNING. `YtdlpLogger` (src/ytmusic.py:41) is a small yt-dlp logger adapter that routes yt-dlp errors/warnings into `file_logger` and collects error strings for the caller.
+Wraps `ytmusicapi.YTMusic` plus yt-dlp. **No import-time side effects.** The download log file is created per instance by `_setup_download_logger()` (src/ytmusic.py:72), which is called from `__init__`. `file_logger` writes file-only (no console handler). `EXCLUDED_PLAYLIST_IDS` (src/ytmusic.py:20) is a module-level `frozenset({"LM", "SE"})` used to skip special playlists. `YtdlpLogger` (src/ytmusic.py:27) is a small yt-dlp logger adapter that routes yt-dlp errors/warnings into `file_logger` and collects error strings for the caller.
 
 | Method | Line | Purpose |
 |--------|------|---------|
-| `__init__` | 72 | Session with hardcoded `socks5://127.0.0.1:1080`, `trust_env=False`; `YTMusic(auth=config/browser.json)`; calls `_check_auth()`. |
-| `_check_auth()` | 91 | Startup probe of `get_account_info()`; warns (no abort) when auth is expired or unverifiable. |
+| `__init__` | 55 | Calls `_setup_download_logger()`; Session with hardcoded `socks5://127.0.0.1:1080`, `trust_env=False`; `YTMusic(auth=config/browser.json)`; calls `_check_auth()`. |
+| `_setup_download_logger()` | 72 | Creates the per-run `logs/download_log_<ts>.log` and attaches it to `file_logger`. |
+| `_check_auth()` | 89 | Startup probe of `get_account_info()`; warns (no abort) when auth is expired or unverifiable. |
 | `import_liked_tracks(tracks)` | 120 | Search + `rate_song(..., "LIKE")` per track; returns `(not_found, errors)`. |
 | `_get_best_result(results, track)` | 156 | Prefers "Top result", then exact title match, then first song. |
 | `get_playlists(limit)` | 172 | `get_library_playlists`. |
@@ -89,10 +93,10 @@ Wraps `ytmusicapi.YTMusic` plus yt-dlp. **Module import has side effects**: conf
 | `search_and_add_to_playlist` | 287 | Search + add, returns counts (not wired to the CLI). |
 | `get_track_out_playlist()` | 334 | See flow 2 below. |
 | `print_tracks(tracks)` | 374 | Writes `logs/tracks.txt` as `artist \t title \t videoId`. |
-| `distribute_tracks()` | 391 | See flow 3 below. |
+| `distribute_tracks()` | 389 | See flow 3 below. |
 | `update_playlists_map(output_file)` | 407 | See flow 4 below; default output `data/playlists_map_updated.yaml`. |
 | `load_playlist_tracks_map(yaml_file)` | 450 | Loads a track map (helper, not wired to CLI). |
-| `download_track(video_id, ...)` | 470 | Single yt-dlp download. Embedded opts: format bestaudio→FFmpegExtractAudio, `concurrent_fragments: 6`, quiet + output suppression, `js_runtimes` (`node` ≥20 / `deno`) and `remote_components: ['ejs:github']` for YouTube's JS challenge, and a `YtdlpLogger` so failures are logged instead of silently swallowed. Returns the file path, or `None` when yt-dlp failed or the output file was not created (reason logged). |
+| `download_track(video_id, ...)` | 467 | Single yt-dlp download. Embedded opts: format bestaudio→FFmpegExtractAudio, `concurrent_fragments: 6`, quiet + output suppression, `js_runtimes` (`node` ≥20 / `deno`) and `remote_components: ['ejs:github']` for YouTube's JS challenge, and a `YtdlpLogger` so failures are logged instead of silently swallowed. Returns the file path, or `None` when yt-dlp failed or the output file was not created (reason logged). |
 | `download_all_playlists(...)` | 580 | See flow 5 below. |
 
 ### src/cli.py — `CLI`
@@ -177,29 +181,29 @@ deleted in the UI.
 ## Data flows
 
 ### 1. Transfer liked tracks (Ya → YT)
-`CLI.transfer_tracks` (src/cli.py:119) → confirm → `move_tracks` (src/cli.py:76):
+`CLI.transfer_tracks` (src/cli.py:189) → confirm → `move_tracks` (src/cli.py:146):
 `export_liked_tracks()` → reverse order → `import_liked_tracks()` (search + LIKE each) → JSON `{liked_tracks, not_found, errors}` written to `args.output` (default `logs/tracks.json`).
 
 ### 2. Tracks out of playlist (YT)
-`get_track_out_playlist` (src/ytmusic.py:327): fetch all library playlists; skip `SE`; the playlist with id `LM` is the liked-music source; every other playlist contributes its `videoId`s to a skip set. Result = liked tracks whose `videoId` is not in the skip set.
+`get_track_out_playlist` (src/ytmusic.py:327): fetch all library playlists; skip playlists in `EXCLUDED_PLAYLIST_IDS`; the playlist with id `LM` is the liked-music source; every other playlist contributes its `videoId`s to a skip set. Result = liked tracks whose `videoId` is not in the skip set.
 
 ### 3. Distribute tracks (YT)
-`distribute_tracks` (src/ytmusic.py:391): load `data/playlists_map.yaml`; take flow 2's track list; for each mapped playlist, add tracks whose first artist is in the map's `artists` list via `add_playlist_items`.
+`distribute_tracks` (src/ytmusic.py:389): load `data/playlists_map.yaml`; take flow 2's track list; for each mapped playlist, add tracks whose first artist is in the map's `artists` list via `add_playlist_items`.
 
 ### 4. Update playlist map (YT)
 `update_playlists_map` (src/ytmusic.py:407): list playlists, drop `LM`/`SE`, for each fetch full playlist + artist set → `title(':'→' -') → {id, artists}` YAML written to `data/playlists_map_updated.yaml` (review, then replace `data/playlists_map.yaml`).
 
 ### 5. Download all playlists (YT)
-`download_all_playlists` (src/ytmusic.py:580): per playlist (excluding `LM`/`SE`) → folder `<ytmusic_download_dir>/<safe_title>/` → load `track_map_<safe_title>.yaml` if present → skip tracks whose `videoId` is in the map **and** whose file still exists on disk → download via `download_track` (yt-dlp) → update map (every 5 entries + at end) → aggregate stats printed and logged. A `None` return from `download_track` counts as a failure and the reason is in `logs/download_log_<ts>.log`.
+`download_all_playlists` (src/ytmusic.py:580): per playlist (excluding `EXCLUDED_PLAYLIST_IDS`) → folder `<ytmusic_download_dir>/<safe_title>/` → load `track_map_<safe_title>.yaml` if present → skip tracks whose `videoId` is in the map **and** whose file still exists on disk → download via `download_track` (yt-dlp) → update map (every 5 entries + at end) → aggregate stats printed and logged. A `None` return from `download_track` counts as a failure and the reason is in `logs/download_log_<ts>.log`.
 
 ### 6. Sync playlists from YAML (Ya, destructive)
-`sync_playlists_from_yaml` (src/yamusic.py:191): read `data/yamusic.yaml` → index existing playlists by title → create missing ones (`users_playlists_create`) → **clear** each playlist (`delete_tracks_from_playlist`) → select liked tracks where `track artists ∩ playlist artists ≠ ∅` → insert in batches of 50 with the latest revision per batch (API limit workaround).
+`sync_playlists_from_yaml` (src/yamusic.py:193): read `data/yamusic.yaml` → index existing playlists by title → create missing ones (`users_playlists_create`) → **clear** each playlist (`delete_tracks_from_playlist`) → select liked tracks where `track artists ∩ playlist artists ≠ ∅` → insert in batches of 50 with the latest revision per batch (API limit workaround).
 
 ### 7. Check liked tracks (Ya, destructive)
-`check_tracks` (src/yamusic.py:308): fetch each liked short track; if fetch raises, remove it from likes (`users_likes_tracks_remove`). Cleans up dead/region-blocked entries.
+`check_tracks` (src/yamusic.py:310): fetch each liked short track; if fetch raises, remove it from likes (`users_likes_tracks_remove`). Cleans up dead/region-blocked entries.
 
 ### 8. Buildin AI (MCP)
-`CLI.buildin_login` (src/cli.py:200) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:235,257) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
+`CLI.buildin_login` (src/cli.py:204) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:239,261) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
 
 ### 9. Playlist maps ⇄ Buildin database
 `export_maps` (src/buildin_maps.py:53): local YAML → desired records → ensure page/database → query existing records → create/update in batches of 50 via `buildin_mutate_database` (idempotency key per batch) → report unchanged/orphaned. `import_maps` (src/buildin_maps.py:114): `ensure_resources` → `buildin_query_database` paginated → validate platform/external id/kind → return maps + diffs → CLI confirmation → `write_imported_maps` writes both YAML files atomically with `.bak` backups (a platform with no Buildin records keeps its local file).
@@ -240,7 +244,7 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 4. `config/config.yaml` holds a plaintext token; security depends entirely on `.gitignore`.
 5. `config/browser.json` with live cookie hashes was committed to git; it is now gitignored and untracked — the exposed cookies should still be rotated (see AGENTS.md Security).
 6. No tests, no CI, no non-interactive mode; verification is manual.
-7. Broad `try/except` around library calls hides error details (worst: bare `except` in src/yamusic.py:76). yt-dlp failures are an exception now: `download_track` logs the real reason via `YtdlpLogger` (src/ytmusic.py:41) and returns `None`.
+7. Broad `try/except` around library calls hides error details. yt-dlp failures are an exception: `download_track` logs the real reason via `YtdlpLogger` (src/ytmusic.py:27) and returns `None`.
 8. `get_playlist_artists` (YT) assumes `track["artists"]` is present for every track; malformed entries raise.
 9. **yt-dlp must be kept current.** The old build (2026.3.17) failed every YouTube download with a 403 on the media request; updating yt-dlp (2026.08.19) fixed it. When downloads suddenly 403 again, update yt-dlp first. Note: the `download_track` opts (`js_runtimes`, `remote_components`) are required on modern yt-dlp for YouTube extraction.
 10. `make clean` removes `__pycache__` only; `downloads/` cleanup is manual.
