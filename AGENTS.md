@@ -98,8 +98,8 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 
 | File | Role |
 |------|------|
-| `.opencode/agents/CodeReview.md` | T2 code reviewer — read-only, reviews the diff of the current branch against `origin/main`. Run before a PR. |
-| `.opencode/agents/architecture.md` | Architecture reviewer (T2-структура) — reviews `src/` layout, `AGENTS.md` conventions, `docs/`, `data/` schemas, `config/`. Run before a PR with structural changes. |
+| `.opencode/agents/CodeReview.md` | CodeReview reviewer — read-only, reviews the diff of the current branch against `origin/main`. Run before a PR. |
+| `.opencode/agents/architecture.md` | Architecture reviewer — reviews `src/` layout, `AGENTS.md` conventions, `docs/`, `data/` schemas, `config/`. Run before a PR with structural changes. |
 | `.opencode/commands/review.md` | `/review` — invokes the `CodeReview` subagent on the current branch. |
 | `.opencode/commands/architecture.md` | `/architecture` — invokes the `architecture` subagent on the current branch. |
 | `.opencode/commands/test.md` | `/test` — import smoke check (`uv run python -c "from src.cli import CLI; ..."`). |
