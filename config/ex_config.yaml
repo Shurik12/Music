@@ -10,3 +10,15 @@ ytmusic_download_dir: downloads
 # config/buildin_tokens.json (gitignored) after the first login.
 # buildin:
 #   mcp_url: https://mcp.buildin.ai/message
+
+# Optional: Telegram bot (Bot API). Send /start to your bot in Telegram, get its
+# token from @BotFather, and fill it in below. Off until used — startup makes no
+# Telegram requests. Chats are auto-captured on first contact (saved to
+# config/telegram.json, gitignored); or list known chat ids under `chats`.
+# A `proxy: false` line disables the app's SOCKS5 proxy for Telegram.
+# telegram:
+#   token: "123456789:AAH...your_bot_token"
+#   chats: [123456789]
+#   proxy: true            # default; set false to hit api.telegram.org directly
+#   # proxy_url: http://127.0.0.1:1443              # default (HTTP CONNECT proxy); use socks5://... for a SOCKS5 one
+#   # api_base: https://api.telegram.org            # default; override if needed

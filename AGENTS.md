@@ -31,6 +31,8 @@ Requires: Python 3.12+ (PEP 701 f-strings), `ffmpeg`, node ≥20 (or deno; yt-dl
 | `src/track.py` | `Track` NamedTuple `(artist, name)` — the transfer currency between both clients. |
 | `src/buildin.py` | `BuildinClient`: self-contained Buildin.ai MCP client — OAuth 2.1 discovery + dynamic registration + PKCE + local browser callback, token refresh, MCP Streamable HTTP (`initialize`, `tools/list`, `tools/call`), JSON and SSE responses. No MCP SDK / new dependencies. Optional: no network at startup. |
 | `src/buildin_maps.py` | Playlist-map sync with a dedicated Buildin page/database: `export_maps` (local YAML → Buildin, creates/updates records) and `import_maps`/`write_imported_maps` (Buildin → local YAML with diff + `.bak`). Page/database IDs cached in `config/buildin_music.json`. |
+| `src/telegram.py` | `TelegramClient`: self-contained Telegram Bot API client (only `requests`) — `sendMessage`/`broadcast` (notifications) and a long-poll `getUpdates` command loop. Talks to `api.telegram.org` **directly** by default (the app's `tg-ws-proxy` on `1443` is Telegram-app-only and does not serve the Bot API); a proxy can be enabled via `telegram.proxy`/`proxy_url`. Chat allow-list + captured chat ids persist in `config/telegram.json`. |
+| `src/telegram_commands.py` | Maps Telegram commands (`/help`, `/status`, `/playlists`, `/transfer`, `/download`, …) to the same client methods the curses CLI uses; `create_handler(...)` builds the poll-loop closure. |
 | `src/args.py` / `src/config.py` / `src/logger.py` | argparse definitions, YAML config loader, **file-only** logging (no console output; writes to `logs/music_api_<ts>.log`). |
 
 Detailed module reference, data flows and file schemas: **docs/ARCHITECTURE.md**.
@@ -69,6 +71,7 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - **Buildin client is lazy and generic.** `BuildinClient` (src/buildin.py:130) makes no network calls until `login()` / `list_tools()` / `call_tool()`. `src/cli.py` exposes login/status/list/call/logout plus the playlist-map sync; deeper music workflows go in a new module that composes both clients. OAuth requires a browser and a temporary `127.0.0.1` callback (5 min timeout). Tokens live in `config/buildin_tokens.json` (0600, gitignored). `BUILDIN_ACCESS_TOKEN` overrides the stored token for headless use/tests.
 - **Buildin map sync is source-of-truth by database.** `src/buildin_maps.py` stores one record per playlist in the `Music Library → Playlists` database (`Title`, `Platform`, `External ID`, `Artists` newline-separated). Property names are matched exactly — renaming `Platform`/`External ID`/`Artists` breaks import. Buildin has no record-deletion tool: locally removed playlists stay as orphans and must be deleted in the UI, otherwise they reappear on import. Import keeps a platform's YAML file when Buildin has zero records for it. IDs cache: `config/buildin_music.json` (delete to rediscover).
 - **MCP transport quirks:** responses may be `application/json` or `text/event-stream`; the client handles both. It refreshes once on HTTP 401 and re-initializes the session once on HTTP 404. If you add tool calls, keep those retries in mind.
+- **Telegram is lazy and opt-in.** `TelegramClient` (src/telegram.py) makes no network call until a command uses it; if `config/config.yaml` has no `telegram.token` it is inert and the Telegram menu items print a "not configured" message. When configured, it talks to `api.telegram.org` **directly** by default — the app's `tg-ws-proxy` on `127.0.0.1:1443` is Telegram-*app*-only (WebSocket) and does **not** serve the Bot API over HTTPS, so do not point `telegram.proxy` at it. To use a proxy, set `telegram.proxy: true` and `telegram.proxy_url` to one that tunnels `api.telegram.org` (e.g. `socks5://...`). Chat ids and the user allow-list persist in `config/telegram.json` (gitignored); if no chat is configured the listener auto-captures the first chat that messages the bot. Long bot commands (`/download`, `/transfer`) block the poll loop — expected for a single-user personal bot. CLI transfer/download/map-export operations automatically broadcast a Telegram notification when configured.
 
 ## Security
 
@@ -76,8 +79,9 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 - `config/browser.json` holds live YouTube auth cookies. It is now gitignored and untracked (previously committed — the cookies were exposed, rotate them). Do not paste its contents anywhere. Re-export procedure: README → *Re-exporting browser.json* — use DevTools **Copy as fetch (Node.js)**, not plain *Copy as fetch* (which drops the `Cookie` header).
 - `config/buildin_tokens.json` holds Buildin OAuth access/refresh tokens (0600, gitignored). Never print it or commit it; use Buildin menu `5` (Log out) to delete it.
 - `config/buildin_music.json` only holds Buildin page/database IDs (no secrets) but is local state; keep it gitignored.
+- `config/telegram.json` holds the Telegram chat allow-list and captured chat ids (no secret, but local state); keep it gitignored. The bot token lives in `config/config.yaml` (`telegram.token`, gitignored) — never print or commit it. `TELEGRAM_BOT_TOKEN` overrides it for scripts/tests.
 - Do not add real tokens/cookies to `config/ex_config.yaml` or any tracked file.
-- `downloads/`, `logs/`, `__pycache__/`, `.venv/`, `config/config.yaml`, `config/browser.json`, `config/buildin_tokens.json` and `config/buildin_music.json` are gitignored — don't force-add them.
+- `downloads/`, `logs/`, `__pycache__/`, `.venv/`, `config/config.yaml`, `config/browser.json`, `config/buildin_tokens.json`, `config/buildin_music.json` and `config/telegram.json` are gitignored — don't force-add them.
 
 ## Where to change what
 
@@ -89,6 +93,8 @@ Full command reference with implementation mapping: **docs/COMMANDS.md**.
 | New CLI flag | `src/args.py`, then wire it in `main.py` (and actually pass it to clients — see proxy gotcha) |
 | New file / output location | `src/paths.py`, then reference the constant (never a bare relative path) |
 | New Buildin MCP workflow | `src/buildin.py` for transport/auth, `src/buildin_maps.py` for the existing page/database sync, `src/cli.py` Buildin helpers (src/cli.py:197-387) for the UI |
+| New Telegram command | `src/telegram_commands.py` (`_TelegramDispatch.cmd_*` + the `dispatch` table) |
+| Telegram transport / auth / notify | `src/telegram.py` (`TelegramClient`); CLI UI in `src/cli.py` (`TELEGRAM_MENU`, `telegram_*`, `_notify_telegram`) |
 | Change Buildin map fields/format | `src/buildin_maps.py` (`_record_properties`, `_records_to_maps`, `_parse_artists`) + README database-schema section |
 | Change playlist matching rules | `distribute_tracks` (src/ytmusic.py:389) for YT, `sync_playlists_from_yaml` (src/yamusic.py:193) for Ya |
 

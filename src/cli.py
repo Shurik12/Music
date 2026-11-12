@@ -8,6 +8,8 @@ from .yamusic import YaMusicHandle
 from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
 from .buildin_maps import MapSyncError, export_maps, import_maps, write_imported_maps
+from .telegram import TelegramClient, TelegramError
+from .telegram_commands import create_handler
 
 
 class CLI:
@@ -39,15 +41,24 @@ class CLI:
         "Export maps",
         "Import maps",
     ]
+    TELEGRAM_MENU = [
+        "Status",
+        "Send test message",
+        "Broadcast message",
+        "Allow users (whitelist)",
+        "Start command listener",
+    ]
 
     def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient,
-                 buildin: BuildinClient, args) -> None:
+                 buildin: BuildinClient, args,
+                 telegram: Optional[TelegramClient] = None) -> None:
         self.yamusic = yamusic
         self.ytmusic = ytmusic
         self.buildin = buildin
         self.args = args
+        self.telegram = telegram
         self.running = True
-        self.mode: Optional[str] = None  # 'ytmusic', 'yamusic' or 'buildin'
+        self.mode: Optional[str] = None  # 'ytmusic', 'yamusic', 'buildin' or 'telegram'
 
     @staticmethod
     def _select(title: str, items: list[str],
@@ -61,6 +72,7 @@ class CLI:
         def _run(stdscr) -> int:
             curses.curs_set(0)
             stdscr.keypad(True)
+            curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
             curses.use_default_colors()
             #  1=title  2=separator  3=selected-item  4=footer
             curses.init_pair(1, curses.COLOR_CYAN,   -1)
@@ -100,7 +112,17 @@ class CLI:
 
             while True:
                 key = stdscr.getch()
-                if key in (ord('q'), ord('Q'), 27):
+                # Mouse events are multi-byte: consume the rest of the packet so
+                # its bytes (which begin with an ESC) are not mistaken for "esc".
+                if key == curses.KEY_MOUSE:
+                    mx, my, _, _, _ = curses.getmouse()
+                    if 2 + selected[0] == my:  # row of the highlighted item
+                        selected[0] = my - 2
+                    elif 2 <= my < 2 + n:  # click another item
+                        selected[0] = my - 2
+                    frame()
+                    continue
+                if key in (ord('q'), ord('Q')) or key == 27:
                     selected[0] = -1
                     break
                 elif key in (curses.KEY_UP, ord('k')):
@@ -181,6 +203,11 @@ class CLI:
         print(color.green(f'  Successfully imported: {len(tracks) - len(not_found) - len(errors)}'))
         print(color.yellow(f'  Not found: {len(not_found)}'))
         print(color.red(f'  Errors: {len(errors)}'))
+
+        self._notify_telegram(
+            f"🎵 Yandex → YouTube transfer: {len(tracks) - len(not_found) - len(errors)} "
+            f"imported / {len(not_found)} not found / {len(errors)} errors (of {len(tracks)})"
+        )
 
         str_data = json.dumps(data, indent=2, ensure_ascii=False)
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -373,7 +400,113 @@ class CLI:
         print(color.green("Written:"))
         for path in written:
             print(f"  {path}  (backup: {path}.bak)")
-    
+
+    # ------------------------------------------------------------------ Telegram
+    def _notify_telegram(self, text: str) -> None:
+        """Best-effort broadcast to Telegram after a CLI operation. Silent if
+        Telegram is unconfigured or the send fails — never interrupts the CLI."""
+        if self.telegram is None or not self.telegram.token:
+            return
+        try:
+            self.telegram.broadcast(text)
+        except Exception as e:
+            print(color.yellow(f"(Telegram notification failed: {e})"))
+
+    def _download(self, fn, message: str, *args):
+        """Run a download callable, then broadcast a Telegram completion message."""
+        fn(*args)
+        self._notify_telegram(message)
+
+    def _need_telegram(self) -> Optional[TelegramClient]:
+        """Return the Telegram client, or None with a message if unconfigured."""
+        if self.telegram is None:
+            print(color.red("Telegram is not configured (no telegram.token in config/config.yaml)."))
+            return None
+        return self.telegram
+
+    def telegram_status(self) -> None:
+        tg = self._need_telegram()
+        if tg is None:
+            return
+        try:
+            info = tg.status()
+        except TelegramError as e:
+            print(color.red(f"Telegram status failed: {e}"))
+            return
+        if not info["configured"]:
+            print(color.red("Not configured (missing token)."))
+            return
+        print(f"  Bot:        {color.cyan('@' + (info.get('bot_username') or 'unknown'))}")
+        print(f"  API base:   {info['api_base']}")
+        print(f"  Proxy:      {color.green('on') if info['proxy'] else color.red('off')}")
+        print(f"  Chats:      {info['chats'] or color.yellow('(none — run Start listener to auto-capture)')}")
+        allowed = info["allow"] if info["allow"] else "anyone (open)"
+        print(f"  Allowed:    {allowed}")
+        if info.get("error"):
+            print(color.yellow(f"  Note: {info['error']}"))
+            print(color.yellow("  → Can't reach api.telegram.org. If this network blocks Telegram,"))
+            print(color.yellow("    run the listener on a machine that can reach it (or set telegram.proxy)."))
+
+    def telegram_test(self) -> None:
+        tg = self._need_telegram()
+        if tg is None:
+            return
+        if not tg.chats:
+            print(color.yellow("No chats known. Run 'Start command listener' first (auto-capture), or add chats to config/telegram.json."))
+            return
+        try:
+            sent = tg.broadcast("🎵 Music bot: test message")
+        except TelegramError as e:
+            print(color.red(f"Send failed: {e}"))
+            return
+        print(color.green(f"Test message sent to {sent} chat(s)."))
+
+    def telegram_broadcast(self) -> None:
+        tg = self._need_telegram()
+        if tg is None:
+            return
+        if not tg.chats:
+            print(color.yellow("No chats known — nothing to broadcast to."))
+            return
+        text = input("Message to broadcast: ").strip()
+        if not text:
+            print("No message given.")
+            return
+        try:
+            sent = tg.broadcast(text)
+        except TelegramError as e:
+            print(color.red(f"Broadcast failed: {e}"))
+            return
+        print(color.green(f"Sent to {sent} chat(s)."))
+
+    def telegram_allow(self) -> None:
+        tg = self._need_telegram()
+        if tg is None:
+            return
+        current = ", ".join(map(str, tg.allow)) if tg.allow else "(open — anyone)"
+        print(f"  Currently allowed: {current}")
+        raw = input("Allowed user ids, comma-separated (empty = open): ").strip()
+        try:
+            ids = [int(x) for x in raw.replace(" ", "").split(",") if x] if raw else []
+        except ValueError:
+            print(color.red("Invalid ids — use numbers only, comma-separated."))
+            return
+        tg.set_allow(ids)
+        print(color.green("Allow-list saved."))
+
+    def telegram_listen(self) -> None:
+        tg = self._need_telegram()
+        if tg is None:
+            return
+        print(color.cyan("Starting Telegram command listener (Ctrl+C to stop)…"))
+        print(color.yellow("Commands run here block until each finishes; long downloads take a while."))
+        handler = create_handler(self.yamusic, self.ytmusic, self.buildin, tg)
+        try:
+            tg.run_commands(handler)
+        except TelegramError as e:
+            print(color.red(f"Listener stopped: {e}"))
+        except KeyboardInterrupt:
+            print(color.cyan("\nListener stopped."))
 
     def run(self) -> None:
         """Main CLI loop"""
@@ -384,13 +517,13 @@ class CLI:
                 # Mode selection
                 if self.mode is None:
                     idx = self._select("Select API Mode",
-                                       ["YouTube Music", "Yandex Music", "Buildin AI"],
+                                       ["YouTube Music", "Yandex Music", "Buildin AI", "Telegram"],
                                        back_label="Exit")
                     if idx == -1:
                         print("\n" + color.cyan("Goodbye!"))
                         self.running = False
                         break
-                    self.mode = ['ytmusic', 'yamusic', 'buildin'][idx]
+                    self.mode = ['ytmusic', 'yamusic', 'buildin', 'telegram'][idx]
 
                 # YouTube Music mode
                 elif self.mode == 'ytmusic':
@@ -416,6 +549,14 @@ class CLI:
                         continue
                     self._dispatch_buildin(idx)
 
+                # Telegram mode
+                elif self.mode == 'telegram':
+                    idx = self._select("Telegram", self.TELEGRAM_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_telegram(idx)
+
             except KeyboardInterrupt:
                 print("\n\n" + color.cyan("Goodbye!"))
                 self.running = False
@@ -437,8 +578,9 @@ class CLI:
             lambda: self.ytmusic.print_tracks(self.ytmusic.get_track_out_playlist()),
             self.ytmusic.update_playlists_map,
             self.ytmusic.distribute_tracks,
-            self.ytmusic.download_all_playlists,
-            lambda: self.ytmusic.download_track("9zhK-QaEYZY"),
+            lambda: self._download(self.ytmusic.download_all_playlists,
+                                   "⬇️ YouTube Music: downloaded all playlists"),
+            lambda: self._download(self.ytmusic.download_track, "9zhK-QaEYZY"),
         ]
         cmds[idx]()
         self._pause()
@@ -447,8 +589,10 @@ class CLI:
         assert 0 <= idx < len(self.YA_MENU), f"Invalid YA menu index: {idx}"
         cmds = [
             self.transfer_tracks,
-            self.yamusic.download_playlists,
-            self.yamusic.download_like_tracks,
+            lambda: self._download(self.yamusic.download_playlists,
+                                   "⬇️ Yandex Music: downloaded all playlists"),
+            lambda: self._download(self.yamusic.download_like_tracks,
+                                   "⬇️ Yandex Music: downloaded liked tracks"),
             self.yamusic.playlist_map,
             self.yamusic.check_tracks,
             self.yamusic.sync_playlists_from_yaml,
@@ -466,6 +610,18 @@ class CLI:
             self.buildin_logout,
             self.buildin_export_maps,
             self.buildin_import_maps,
+        ]
+        cmds[idx]()
+        self._pause()
+
+    def _dispatch_telegram(self, idx: int) -> None:
+        assert 0 <= idx < len(self.TELEGRAM_MENU), f"Invalid Telegram menu index: {idx}"
+        cmds = [
+            self.telegram_status,
+            self.telegram_test,
+            self.telegram_broadcast,
+            self.telegram_allow,
+            self.telegram_listen,
         ]
         cmds[idx]()
         self._pause()

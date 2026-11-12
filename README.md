@@ -11,6 +11,7 @@ It can:
 - Download Yandex Music playlists / liked tracks as MP3 via the `yandex-music` API.
 - Track already-downloaded tracks per playlist with `track_map_*.yaml` files (resumable downloads).
 - Optional **Buildin.ai** integration over MCP (OAuth login, generic tool browser) as a foundation for music ↔ Buildin workflows.
+- Optional **Telegram bot** (Bot API): push notifications after sync/downloads and run commands (`/transfer`, `/download`, …) from a chat.
 
 ## Requirements
 
@@ -120,13 +121,60 @@ YouTube auth expires after a while (Google session cookies go stale). Symptoms: 
 
 `config/browser.json` holds live session cookies — never commit it.
 
+### Telegram (optional)
+
+A Telegram bot (Bot API) that both **reports results** (after transfers,
+downloads, map syncs) and **runs commands** from a chat. It is off until
+configured — startup makes no Telegram requests.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy
+   the token.
+2. In `config/config.yaml` add:
+
+   ```yaml
+   telegram:
+     token: "123456789:AAH...your_bot_token"
+     # optional; omit to auto-capture your chat on first contact
+     # chats: [123456789]
+     # proxy: true        # default; set false to hit api.telegram.org directly
+   ```
+
+3. In the CLI, choose mode **4 (Telegram)**:
+   - **1 Status** — bot identity, chats, proxy.
+   - **2 Send test message** — verify delivery.
+   - **3 Broadcast message** — send a manual message to all chats.
+   - **4 Allow users** — set a whitelist of Telegram user ids (empty = open).
+   - **5 Start command listener** — long-poll loop that answers bot commands
+     (Ctrl+C to stop).
+
+From Telegram, send `/help` to the bot for the command list: `/status`,
+`/playlists`, `/ya`, `/transfer`, `/download`, `/yadownload`, `/liked`, `/maps`,
+`/notify <text>`. Commands run on the listener thread and block until they
+finish — long downloads take a while.
+
+Notes:
+
+- The bot talks to `api.telegram.org` **directly** by default (the Bot API works
+  best that way). The app's `tg-ws-proxy` on `1443` is Telegram-*app*-only and
+  does **not** serve the Bot API, so don't use it. If you have a proxy that
+  tunnels `api.telegram.org`, set `telegram.proxy: true` and
+  `telegram.proxy_url: http://127.0.0.1:PORT` (or `socks5://...`).
+  like the rest of the app; set `telegram.proxy: false` to go direct.
+- If no chat is configured, the listener auto-captures the first chat that
+  messages the bot and stores it in `config/telegram.json` (gitignored).
+- CLI operations (transfer, downloads, map export) automatically send a
+  notification when Telegram is configured.
+- `TELEGRAM_BOT_TOKEN` overrides the stored token for scripts/tests.
+
+`config/telegram.json` holds the chat allow-list — no secret, but gitignored.
+
 ## Usage
 
 ```bash
 uv run main.py             # or: make run
 ```
 
-The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music or Buildin AI), then issue commands.
+The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music, Buildin AI or Telegram), then issue commands.
 
 ### YouTube Music mode
 
@@ -167,6 +215,21 @@ The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music o
 Commands 3, 4, 6 and 7 start the login flow automatically when not authorized.
 The client speaks MCP Streamable HTTP, handles SSE and JSON responses, refreshes
 expired tokens, and re-initializes the session if the server drops it.
+
+### Telegram mode
+
+Requires the `telegram:` section in `config/config.yaml` (see [Telegram (optional)](#telegram-optional)).
+
+| # | Command | What it does |
+|---|---------|--------------|
+| 1 | Status | Prints the bot identity, known chats, proxy and allow-list |
+| 2 | Send test message | Sends a test message to all known chats |
+| 3 | Broadcast message | Prompts for a message and sends it to all known chats |
+| 4 | Allow users | Sets the whitelist of Telegram user ids (empty = open) |
+| 5 | Start command listener | Long-poll loop answering bot commands (`/help` lists them); Ctrl+C stops |
+
+CLI operations (transfer, downloads, map export) also push a notification to
+Telegram automatically when it is configured.
 
 ### CLI flags
 

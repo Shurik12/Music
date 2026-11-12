@@ -12,8 +12,9 @@ main.py
   ├── YTMusicClient   (src/ytmusic.py)  ──►  YouTube Music API (ytmusicapi)
   │                                     ──►  YouTube downloads (yt-dlp, SOCKS5)
   ├── BuildinClient   (src/buildin.py)  ──►  Buildin MCP (OAuth 2.1 + Streamable HTTP)
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
   │
-  └── CLI             (src/cli.py)      curses menu loop, dispatches to both clients
+  └── CLI             (src/cli.py)      curses menu loop, dispatches to all clients
                                           └── src/color.py  (ANSI color helpers)
 ```
 
@@ -33,6 +34,7 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 | `BROWSER_AUTH_FILE` | `config/browser.json` |
 | `BUILDIN_TOKENS_FILE` | `config/buildin_tokens.json` |
 | `BUILDIN_STATE_FILE` | `config/buildin_music.json` |
+| `TELEGRAM_STATE_FILE` | `config/telegram.json` |
 | `PLAYLISTS_MAP_FILE` | `data/playlists_map.yaml` |
 | `YAMUSIC_MAP_FILE` | `data/yamusic.yaml` |
 
@@ -48,7 +50,8 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
 7. `YTMusicClient()` (src/ytmusic.py:55) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:89), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable. The download log file is created per instance by `_setup_download_logger()` (src/ytmusic.py:72).
 8. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
-9. `CLI(yamusic, ytmusic, buildin, args).run()` (src/cli.py:407) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
+9. `TelegramClient(telegram_config)` (src/telegram.py) is built from the optional `telegram:` config section; performs **no network access** until a Telegram command is used. When unconfigured (no `telegram.token`) it is inert.
+10. `CLI(yamusic, ytmusic, buildin, args, telegram).run()` (src/cli.py) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
 
 Any exception in startup is caught in `main.py:83`, logged with traceback, exit code 1.
 
@@ -123,6 +126,7 @@ No-dependency color module. Auto-disabled by `NO_COLOR=1` or `TERM=dumb`.
 Usage in `src/cli.py`: titles/URLs → `cyan`, success → `green`, warnings/prompts → `yellow`, errors → `red`, summaries → `bold`.
 
 ### src/buildin.py — `BuildinClient`
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
 
 Self-contained Buildin.ai MCP client (no MCP SDK). It implements:
 
@@ -170,6 +174,34 @@ normalized with `:` → ` -` on import, matching the YAML key convention.
 Buildin records cannot be deleted through MCP, so removed playlists must be
 deleted in the UI.
 
+### src/telegram.py — `TelegramClient`
+
+Self-contained Telegram Bot API client (only `requests`), used for both
+**notifications** (push messages to chats) and a **command listener**
+(long-poll `getUpdates`). Configuration comes from the `telegram:` section of
+`config/config.yaml`; chat ids and the user allow-list persist in
+`config/telegram.json` (gitignored, mode 0600).
+
+| Method | Purpose |
+|--------|---------|
+| `__init__(config, token_file)` | Read token (`TELEGRAM_BOT_TOKEN` env overrides config), `api_base`, `chats`; merge persisted state; build a `requests.Session` that routes through the app's local HTTP CONNECT proxy (`http://127.0.0.1:1443`) unless `proxy: false` |
+| `_call(method, **params)` | POST to `api.telegram.org/bot<token>/<method>`; handles `429` (honours `retry_after`, retries once) and non-ok responses (raises `TelegramError`) |
+| `send_message(chat_id, text)` | `sendMessage` (truncates to 4096 chars) |
+| `broadcast(text)` | Send to every known chat; returns count sent |
+| `is_authorized(user_id)` | True if the allow-list is empty (open) or contains the id |
+| `add_chat` / `set_allow` | Persist chat list / allow-list to state |
+| `run_commands(handler)` | Blocking long-poll loop; dispatches each authorized message to `handler(update, text)` and sends its return as a reply; transient errors back off and retry |
+| `_capture_first_chat()` | When no chat is configured, wait for the first message and register it |
+| `status()` | Summary for the CLI status screen (calls `getMe`) |
+
+### src/telegram_commands.py — command handlers
+
+`create_handler(yamusic, ytmusic, buildin, tg)` returns the closure the poll
+loop expects. Maps Telegram commands to the same client methods the curses CLI
+uses: `/help`, `/status`, `/playlists`, `/ya`, `/transfer`, `/download`,
+`/yadownload`, `/liked`, `/maps`, `/notify <text>`. Only users in the allow-list
+are served; long operations block the loop and report start + result to the chat.
+
 ### Support modules
 
 - `src/paths.py` — project-wide path constants and helpers (`ensure_directories`, `resolve`, `resolve_config`, `browser_auth_file`). All paths anchor to the repo root; no module should use bare relative filenames.
@@ -204,6 +236,7 @@ deleted in the UI.
 
 ### 8. Buildin AI (MCP)
 `CLI.buildin_login` (src/cli.py:204) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:239,261) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
 
 ### 9. Playlist maps ⇄ Buildin database
 `export_maps` (src/buildin_maps.py:53): local YAML → desired records → ensure page/database → query existing records → create/update in batches of 50 via `buildin_mutate_database` (idempotency key per batch) → report unchanged/orphaned. `import_maps` (src/buildin_maps.py:114): `ensure_resources` → `buildin_query_database` paginated → validate platform/external id/kind → return maps + diffs → CLI confirmation → `write_imported_maps` writes both YAML files atomically with `.bak` backups (a platform with no Buildin records keeps its local file).

@@ -12,6 +12,7 @@ from src import (
     YaMusicHandle,
     YTMusicClient,
     BuildinClient,
+    TelegramClient,
     CLI
 )
 from src.buildin import DEFAULT_MCP_URL
@@ -71,9 +72,17 @@ def main() -> None:
             token_file=paths.resolve(token_file) if token_file else paths.BUILDIN_TOKENS_FILE,
         )
         logger.info(f"Buildin MCP endpoint: {buildin_url}")
-        
+
+        # Telegram bot (Bot API); optional — no network access until a command
+        # uses it. Configured via the `telegram:` section of config.yaml.
+        telegram_config = config.get("telegram") or {}
+        if not isinstance(telegram_config, dict):
+            raise ValueError("config 'telegram' section must be a mapping")
+        telegram = TelegramClient(telegram_config)
+        logger.info("Telegram bot: configured" if telegram.token else "Telegram bot: not configured (no telegram.token)")
+
         # Start CLI interface
-        cli = CLI(yamusic, ytmusic, buildin, args)
+        cli = CLI(yamusic, ytmusic, buildin, args, telegram)
         cli.run()
         
         logger.info("Transfer completed successfully")
