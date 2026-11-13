@@ -55,6 +55,7 @@ class YTMusicClient:
     def __init__(
         self,
         download_dir: str = str(paths.DOWNLOAD_DIR),
+        auth: Optional[Dict[str, str]] = None,
     ):
         self._setup_download_logger()
         self.download_dir = download_dir
@@ -65,9 +66,18 @@ class YTMusicClient:
         }
         session.trust_env = False
 
+        # Browser auth headers come from config.yaml (`ytmusic.auth`) when
+        # present; `config/browser.json` is only a legacy fallback.
         self.auth_file = paths.browser_auth_file()
+        if auth:
+            self.auth_source = "config/config.yaml (ytmusic.auth)"
+            auth_arg: Union[str, Dict[str, str]] = auth
+        else:
+            self.auth_source = str(self.auth_file)
+            auth_arg = str(self.auth_file)
+
         self.ytmusic = YTMusic(
-            auth=str(self.auth_file),
+            auth=auth_arg,
             requests_session=session,
         )
         self._check_auth()
@@ -85,26 +95,26 @@ class YTMusicClient:
         file_logger.addHandler(file_handler)
 
     def _check_auth(self) -> None:
-        """Probe the account endpoint; expired browser.json silently returns logged-out data."""
+        """Probe the account endpoint; expired auth silently returns logged-out data."""
         try:
             info = self.ytmusic.get_account_info()
         except KeyError:
             print(
                 "WARNING: YouTube Music authentication is expired or invalid "
-                f"({self.auth_file}).\n"
+                f"({self.auth_source}).\n"
                 "         Library/playlist/liked-track methods will return empty results.\n"
                 "         Re-export it: log into https://music.youtube.com in a browser, copy a\n"
                 "         'browse' request's headers from DevTools, then run: ytmusicapi browser"
             )
             file_logger.warning(
-                f"YouTube Music auth check failed: {self.auth_file} expired or invalid "
+                f"YouTube Music auth check failed: {self.auth_source} expired or invalid "
                 "(logged-out response)"
             )
             return
         except Exception as e:
             print(
                 f"WARNING: Could not verify YouTube Music authentication ({type(e).__name__}: {e}).\n"
-                f"         Check network/proxy (SOCKS5 127.0.0.1:1080) and {self.auth_file}."
+                f"         Check network/proxy (SOCKS5 127.0.0.1:1080) and {self.auth_source}."
             )
             file_logger.warning(f"YouTube Music auth check failed: {type(e).__name__}: {e}")
             return

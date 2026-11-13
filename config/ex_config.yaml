@@ -1,13 +1,27 @@
 # Copy this file to config.yaml in the same `config/` folder and fill in your
 # Yandex Music OAuth token. config.yaml is gitignored — never commit real tokens.
-token: "your_yandex_token"
+yamusic_token: "your_yandex_token"
 
 # Where YouTube Music downloads go (absolute path, or relative to the repo root).
 # Yandex Music downloads ignore this and always use ./downloads.
 ytmusic_download_dir: downloads
 
-# Optional: Buildin.ai MCP integration. OAuth tokens are stored in
-# config/buildin_tokens.json (gitignored) after the first login.
+# YouTube Music browser auth. The app writes (and refreshes) this managed block
+# from `ytmusicapi browser --file config/browser.json` via:
+#   uv run python -m src.config_tools inline-browser
+# Do not edit inside the managed markers. Required headers: `cookie` (with
+# __Secure-3PAPISID) and `authorization`. config/browser.json still works as a
+# legacy fallback when this section is absent.
+# ytmusic:
+#   auth:
+#     authorization: "SAPISIDHASH ..."
+#     cookie: "__Secure-3PAPISID=...; ..."
+
+# Optional: Buildin.ai MCP integration. The app writes the OAuth credentials into
+# this file under `buildin.auth` (a managed block between marker comments — do
+# not edit inside it). Only the needed fields are stored: access_token,
+# refresh_token, expires_at, client_id, client_secret (if issued), resource,
+# token_endpoint. `BUILDIN_ACCESS_TOKEN` overrides them for headless runs.
 # buildin:
 #   mcp_url: https://mcp.buildin.ai/message
 
@@ -22,3 +36,23 @@ ytmusic_download_dir: downloads
 #   proxy: true            # default; set false to hit api.telegram.org directly
 #   # proxy_url: http://127.0.0.1:1443              # default (HTTP CONNECT proxy); use socks5://... for a SOCKS5 one
 #   # api_base: https://api.telegram.org            # default; override if needed
+#
+# If api.telegram.org is blocked on your network, route the Bot API through an
+# MTProto proxy instead (Telethon transport). The proxy secret is NOT a bot
+# token — you still need `token` above, plus api_id/api_hash from my.telegram.org
+# (any app works; a bot logs in with its BotFather token).
+# telegram:
+#   token: "123456789:AAH...your_bot_token"
+#   api_id: 1234567
+#   api_hash: "0123456789abcdef0123456789abcdef"
+#   phone: "+79001234567"       # optional: used by the user-account session
+#   mtproto:
+#     host: 127.0.0.1
+#     port: 1443
+#     secret: "0123456789abcdef0123456789abcdef"
+#
+# The user-account session (Telegram menu → User) logs in with your own phone
+# number and stores its authorization in config/telegram_user.session
+# (gitignored). It is what gives access to Saved Messages and your dialogs —
+# a bot account cannot see them.
+

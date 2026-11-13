@@ -7,6 +7,7 @@ from src.ytmusic import YTMusicClient
 from src.buildin import BuildinClient, BuildinError
 from src.buildin_maps import MapSyncError
 from src.telegram import TelegramClient, TelegramError
+from src.telegram_user import TelegramUserClient
 from src.telegram_commands import create_handler
 from src.cli import CLI
 
@@ -23,6 +24,7 @@ __all__ = [
     'MapSyncError',
     'TelegramClient',
     'TelegramError',
+    'TelegramUserClient',
     'create_handler',
     'CLI'
 ]

@@ -12,7 +12,7 @@ main.py
   ├── YTMusicClient   (src/ytmusic.py)  ──►  YouTube Music API (ytmusicapi)
   │                                     ──►  YouTube downloads (yt-dlp, SOCKS5)
   ├── BuildinClient   (src/buildin.py)  ──►  Buildin MCP (OAuth 2.1 + Streamable HTTP)
-   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (requests) / MTProto proxy (Telethon)
   │
   └── CLI             (src/cli.py)      curses menu loop, dispatches to all clients
                                           └── src/color.py  (ANSI color helpers)
@@ -32,7 +32,6 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 | `DEFAULT_CONFIG_FILE` | `config/config.yaml` |
 | `EXAMPLE_CONFIG_FILE` | `config/ex_config.yaml` |
 | `BROWSER_AUTH_FILE` | `config/browser.json` |
-| `BUILDIN_TOKENS_FILE` | `config/buildin_tokens.json` |
 | `BUILDIN_STATE_FILE` | `config/buildin_music.json` |
 | `TELEGRAM_STATE_FILE` | `config/telegram.json` |
 | `PLAYLISTS_MAP_FILE` | `data/playlists_map.yaml` |
@@ -46,11 +45,11 @@ All runtime paths live in `src/paths.py` and are anchored to `PROJECT_ROOT` (the
 2. `parse_args()` (src/args.py:4) — see flags in COMMANDS.md.
 3. `--output` is always resolved via `paths.resolve()` (main.py:32).
 4. `setup_logging()` (src/logger.py:9) — root logger → **file only** `logs/music_api_<ts>.log` (no console output).
-5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py` uses `config["token"]`.
+5. `load_config()` (src/config.py:11) resolves and reads the YAML file; `main.py` uses `config["yamusic_token"]`.
 6. `YaMusicHandle(token)` (src/yamusic.py:13) calls `Client(token).init()` → live API call at startup.
-7. `YTMusicClient()` (src/ytmusic.py:55) builds a `requests.Session` with the SOCKS5 proxy and `YTMusic(auth=str(paths.browser_auth_file()))` (`config/browser.json`), then runs `_check_auth()` (src/ytmusic.py:89), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable. The download log file is created per instance by `_setup_download_logger()` (src/ytmusic.py:72).
+7. `YTMusicClient()` (src/ytmusic.py:55) builds a `requests.Session` with the SOCKS5 proxy, then `YTMusic(auth=...)` using the headers from `ytmusic.auth` in `config.yaml` (falling back to `str(paths.browser_auth_file())`, i.e. `config/browser.json`), and runs `_check_auth()` (src/ytmusic.py:89), which probes `get_account_info()` and warns — without aborting startup — if the auth is expired or unverifiable (`self.auth_source` names the source). The download log file is created per instance by `_setup_download_logger()` (src/ytmusic.py:72).
 8. `BuildinClient` (src/buildin.py:130) is constructed from `buildin.mcp_url` but performs **no network access** until a Buildin command is used.
-9. `TelegramClient(telegram_config)` (src/telegram.py) is built from the optional `telegram:` config section; performs **no network access** until a Telegram command is used. When unconfigured (no `telegram.token`) it is inert.
+9. `TelegramClient(telegram_config)` (src/telegram.py) is built from the optional `telegram:` config section; performs **no network access** until a Telegram command is used. When unconfigured (no `telegram.token`) it is inert. `TelegramUserClient(telegram_config)` (src/telegram_user.py) is built alongside it for the user-account session (Saved Messages); it is equally lazy and does not connect at startup.
 10. `CLI(yamusic, ytmusic, buildin, args, telegram).run()` (src/cli.py) — blocking interactive loop; `KeyboardInterrupt` exits cleanly.
 
 Any exception in startup is caught in `main.py:83`, logged with traceback, exit code 1.
@@ -85,7 +84,7 @@ Wraps `ytmusicapi.YTMusic` plus yt-dlp. **No import-time side effects.** The dow
 
 | Method | Line | Purpose |
 |--------|------|---------|
-| `__init__` | 55 | Calls `_setup_download_logger()`; Session with hardcoded `socks5://127.0.0.1:1080`, `trust_env=False`; `YTMusic(auth=config/browser.json)`; calls `_check_auth()`. |
+| `__init__(download_dir, auth=None)` | 55 | Calls `_setup_download_logger()`; Session with hardcoded `socks5://127.0.0.1:1080`, `trust_env=False`; `YTMusic(auth=<ytmusic.auth headers>)` (or `config/browser.json` when `auth` is omitted); calls `_check_auth()`. |
 | `_setup_download_logger()` | 72 | Creates the per-run `logs/download_log_<ts>.log` and attaches it to `file_logger`. |
 | `_check_auth()` | 89 | Startup probe of `get_account_info()`; warns (no abort) when auth is expired or unverifiable. |
 | `import_liked_tracks(tracks)` | 120 | Search + `rate_song(..., "LIKE")` per track; returns `(not_found, errors)`. |
@@ -126,19 +125,19 @@ No-dependency color module. Auto-disabled by `NO_COLOR=1` or `TERM=dumb`.
 Usage in `src/cli.py`: titles/URLs → `cyan`, success → `green`, warnings/prompts → `yellow`, errors → `red`, summaries → `bold`.
 
 ### src/buildin.py — `BuildinClient`
-   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (requests) / MTProto proxy (Telethon)
 
 Self-contained Buildin.ai MCP client (no MCP SDK). It implements:
 
-- **OAuth**: metadata discovery from `/.well-known/oauth-protected-resource` and `.well-known/oauth-authorization-server`, dynamic client registration (public client, `none` auth method), PKCE S256, a temporary `127.0.0.1` callback server (5-minute timeout), JSON token exchange with a form-encoded fallback, refresh-token grant, and a 0600 token file at `config/buildin_tokens.json`.
+- **OAuth**: metadata discovery from `/.well-known/oauth-protected-resource` and `.well-known/oauth-authorization-server`, dynamic client registration (public client, `none` auth method), PKCE S256, a temporary `127.0.0.1` callback server (5-minute timeout), JSON token exchange with a form-encoded fallback, refresh-token grant, and credentials persisted in `config/config.yaml` under `buildin.auth` (mode 0600).
 - **MCP Streamable HTTP**: `initialize` → `notifications/initialized`, `Mcp-Session-Id` / `MCP-Protocol-Version` headers, JSON *and* `text/event-stream` response parsing, one refresh on 401, one session re-init on 404.
 - **Generic tools**: `list_tools()` → `tools/list`, `call_tool(name, arguments)` → `tools/call`.
 
 | Method | Line | Purpose |
 |--------|------|---------|
 | `is_authorized()` / `status()` | 148 / 153 | Token presence + expiry info; no network |
-| `login()` | 164 | Full OAuth flow; persists tokens |
-| `logout()` | 223 | Deletes tokens, resets session |
+| `login()` | 164 | Full OAuth flow; persists the needed credentials into `buildin.auth` |
+| `logout()` | 223 | Removes `buildin.auth`, resets session |
 | `list_tools()` | 227 | Returns the server's tool list |
 | `call_tool(name, args)` | 231 | Invokes a tool; returns the MCP `result` dict |
 | `_discover_metadata()` | 236 | OAuth resource + authorization-server discovery |
@@ -148,7 +147,10 @@ Self-contained Buildin.ai MCP client (no MCP SDK). It implements:
 | `_ensure_session()` / `_rpc()` | 435 / 479 | MCP session lifecycle and JSON-RPC calls |
 | `_read_response()` / `_read_sse()` | 506 / 529 | JSON and SSE response decoding |
 
-`BUILDIN_ACCESS_TOKEN` bypasses the stored token, which makes headless
+`TokenStore` (src/buildin.py) reads and writes `config/config.yaml` → `buildin.auth`
+between marker comments via `src/config.update_section()`, keeping only
+`access_token`, `refresh_token`, `expires_at`, `client_id`, `client_secret`,
+`resource` and `token_endpoint`. `BUILDIN_ACCESS_TOKEN` bypasses the stored token, which makes headless
 integration and tests possible. The transport is protocol-version agnostic in
 practice: it sends `2025-06-18` and adopts whatever version the server returns.
 
@@ -176,23 +178,29 @@ deleted in the UI.
 
 ### src/telegram.py — `TelegramClient`
 
-Self-contained Telegram Bot API client (only `requests`), used for both
-**notifications** (push messages to chats) and a **command listener**
-(long-poll `getUpdates`). Configuration comes from the `telegram:` section of
-`config/config.yaml`; chat ids and the user allow-list persist in
-`config/telegram.json` (gitignored, mode 0600).
+Telegram client with **two transports behind one API**, used for both
+**notifications** (push messages to chats) and a **command listener** (Bot API
+long-poll `getUpdates`, or Telethon `NewMessage` events). Configuration comes
+from the `telegram:` section of `config/config.yaml`; chat ids and the user
+allow-list persist in `config/telegram.json` (gitignored, mode 0600).
+
+| Transport | Selected by | Wire |
+|-----------|-------------|------|
+| `bot-api` (default) | no `telegram.mtproto` | HTTPS to `api.telegram.org` via `requests` |
+| `mtproto` | `telegram.mtproto: {host, port, secret}` | Telethon through an MTProxy (e.g. `tg-ws-proxy` on `127.0.0.1:1443`); needs `telegram.api_id` / `api_hash`, session in `config/telegram_mtproto.session` (gitignored) |
 
 | Method | Purpose |
 |--------|---------|
-| `__init__(config, token_file)` | Read token (`TELEGRAM_BOT_TOKEN` env overrides config), `api_base`, `chats`; merge persisted state; build a `requests.Session` that routes through the app's local HTTP CONNECT proxy (`http://127.0.0.1:1443`) unless `proxy: false` |
-| `_call(method, **params)` | POST to `api.telegram.org/bot<token>/<method>`; handles `429` (honours `retry_after`, retries once) and non-ok responses (raises `TelegramError`) |
-| `send_message(chat_id, text)` | `sendMessage` (truncates to 4096 chars) |
+| `__init__(config, token_file)` | Read token (`TELEGRAM_BOT_TOKEN` env overrides config), `api_base`, `api_id`/`api_hash` (`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`), `chats`, `mtproto`; merge persisted state. Bot API: build a `requests.Session` that optionally routes through `telegram.proxy_url`. MTProto: store the proxy config only — the Telethon client and its background asyncio loop are created lazily on first use |
+| `_call(method, **params)` | Bot API only: POST to `api.telegram.org/bot<token>/<method>`; handles `429` (honours `retry_after`, retries once) and non-ok responses (raises `TelegramError`) |
+| `_ensure_tg()` / `_run(coro)` | MTProto only: connect the Telethon bot client (constructed **inside** the background loop so it binds to it), sign in with the bot token, and run coroutines on that loop from synchronous code |
+| `send_message(chat_id, text)` | `sendMessage` (truncates to 4096 chars) over whichever transport is active |
 | `broadcast(text)` | Send to every known chat; returns count sent |
 | `is_authorized(user_id)` | True if the allow-list is empty (open) or contains the id |
 | `add_chat` / `set_allow` | Persist chat list / allow-list to state |
-| `run_commands(handler)` | Blocking long-poll loop; dispatches each authorized message to `handler(update, text)` and sends its return as a reply; transient errors back off and retry |
-| `_capture_first_chat()` | When no chat is configured, wait for the first message and register it |
-| `status()` | Summary for the CLI status screen (calls `getMe`) |
+| `run_commands(handler)` | Blocking command loop; dispatches each authorized message to `handler(update, text)` and sends its return as a reply. Bot API: long-poll, transient errors back off and retry. MTProto: event handler; the (blocking) handler runs in an executor so the loop stays free |
+| `_capture_first_chat()` | Bot API only: when no chat is configured, wait for the first message and register it (MTProto captures the first chat inside its event handler) |
+| `status()` | Summary for the CLI status screen (calls `getMe` / `get_me`) |
 
 ### src/telegram_commands.py — command handlers
 
@@ -202,11 +210,35 @@ uses: `/help`, `/status`, `/playlists`, `/ya`, `/transfer`, `/download`,
 `/yadownload`, `/liked`, `/maps`, `/notify <text>`. Only users in the allow-list
 are served; long operations block the loop and report start + result to the chat.
 
+### src/telegram_user.py — `TelegramUserClient`
+
+A **second** Telethon session, logged in as the *user* rather than the bot. A
+bot account has no Saved Messages and cannot enumerate a user's chats, so those
+operations live here. It shares `telegram.api_id`/`api_hash` and the MTProto
+proxy with the bot but keeps its own authorization in
+`config/telegram_user.session` (gitignored); `telegram.phone` is optional
+(prompted at login), `TELEGRAM_PHONE` overrides it.
+
+| Method | Purpose |
+|--------|---------|
+| `configured` | True when `api_id`/`api_hash` are present (login may still be pending) |
+| `is_authorized()` | True when the session file holds a logged-in account |
+| `login(phone=None)` | Interactive: `send_code_request` → prompt code (empty input = request SMS) → `sign_in`; on `SessionPasswordNeededError` prompts the 2FA password via `getpass`; returns `{id, username, name}`. Flood/`SendCodeUnavailable` errors are translated into actionable `TelegramError` messages |
+| `login_qr(timeout=180)` | QR login via `client.qr_login()`: renders the `tg://login` token as a terminal QR (`qrcode`, ASCII) and waits for the scan; asks the 2FA password if the session is still unauthorized afterwards. Best path when code delivery is rate-limited |
+| `get_saved_messages(limit=20, offset_id=0)` | `client.get_messages('me', …)` → `[{id, date, text, media, out}]`, newest first; `offset_id=<last id>` pages back; limit capped at 200 |
+| `logout()` | `log_out()` on Telegram's side, then removes the local session file |
+| `status()` | Never-raising summary: `configured`, `authorized`, `phone`, `session`, `id`/`username`/`name`, `error` |
+
+Both clients use `MTProtoSession` (src/telegram.py) — a background asyncio
+loop plus one Telethon client constructed inside that loop. The two sessions
+are independent: different session files, separate connections.
+
 ### Support modules
 
 - `src/paths.py` — project-wide path constants and helpers (`ensure_directories`, `resolve`, `resolve_config`, `browser_auth_file`). All paths anchor to the repo root; no module should use bare relative filenames.
-- `src/config.py:11` — `load_config(path)` → dict; resolves `config.yaml` in `config/` (bare name) or the given path; raises on missing file / YAML error.
+- `src/config.py:11` — `load_config(path)` → dict; resolves `config.yaml` in `config/` (bare name) or the given path; raises on missing file / YAML error. `update_section(path, key, value)` rewrites one top-level YAML section between `# >>> key …` / `# <<< key <<<` markers, preserving the rest of the file (used for `buildin.auth`).
 - `src/args.py:4` — argparse; `--no-proxy`, `--proxy-port`, `--log-file` are parsed but never wired.
+- `src/config_tools.py` — `python -m src.config_tools inline-browser` writes `config/browser.json` into `config.yaml` as the managed `ytmusic.auth` block (idempotent, preserves the rest of the file).
 - `src/logger.py:9` — `setup_logging(level, output_file)`; `get_logger(name)`. **File-only** logging: writes to `<root>/logs/music_api_<ts>.log`, nothing to stdout.
 - `src/color.py` — ANSI color helpers (no dependencies); auto-disabled by `NO_COLOR=1` / `TERM=dumb`.
 
@@ -235,8 +267,8 @@ are served; long operations block the loop and report start + result to the chat
 `check_tracks` (src/yamusic.py:310): fetch each liked short track; if fetch raises, remove it from likes (`users_likes_tracks_remove`). Cleans up dead/region-blocked entries.
 
 ### 8. Buildin AI (MCP)
-`CLI.buildin_login` (src/cli.py:204) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/buildin_tokens.json`. `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:239,261) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
-   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (sendMessage / getUpdates, SOCKS5)
+`CLI.buildin_login` (src/cli.py:204) → `BuildinClient.login` (src/buildin.py:164): discover OAuth metadata → dynamic client registration → browser consent (PKCE S256, `127.0.0.1` callback) → token exchange → `config/config.yaml` (`buildin.auth`, managed block). `CLI.buildin_tools` / `buildin_call_tool` (src/cli.py:239,261) → `list_tools()` / `call_tool()` (src/buildin.py:227,231) → MCP `initialize`/`notifications/initialized` on first use → `tools/list` / `tools/call`. A 401 triggers one refresh-token exchange; a 404 triggers one session re-initialization.
+   ├── TelegramClient  (src/telegram.py) ──►  Telegram Bot API (requests) / MTProto proxy (Telethon)
 
 ### 9. Playlist maps ⇄ Buildin database
 `export_maps` (src/buildin_maps.py:53): local YAML → desired records → ensure page/database → query existing records → create/update in batches of 50 via `buildin_mutate_database` (idempotency key per batch) → report unchanged/orphaned. `import_maps` (src/buildin_maps.py:114): `ensure_resources` → `buildin_query_database` paginated → validate platform/external id/kind → return maps + diffs → CLI confirmation → `write_imported_maps` writes both YAML files atomically with `.bak` backups (a platform with no Buildin records keeps its local file).
@@ -245,11 +277,13 @@ are served; long operations block the loop and report start + result to the chat
 
 | File | Written by | Schema |
 |------|-----------|--------|
-| `config/config.yaml` | user | `token: <yandex OAuth>`, optional `ytmusic_download_dir: <path>` (YT output root, relative to repo root, default `downloads`) and optional `buildin.mcp_url`; flat; gitignored |
+| `config/config.yaml` | user (+ app for `buildin.auth` / `ytmusic.auth`) | `yamusic_token`; optional `ytmusic_download_dir: <path>` (YT output root, relative to repo root, default `downloads`), optional `ytmusic:` (managed `auth` block with the YouTube browser headers), optional `buildin:` (`mcp_url`, managed `auth` with `{access_token, refresh_token, expires_at, client_id, client_secret?, resource, token_endpoint}`), optional `telegram:` (`token`, `api_id`, `api_hash`, `phone`, `chats`, `api_base`, `proxy`, `proxy_url`, `mtproto: {host, port, secret}`); mode 0600; gitignored |
 | `config/ex_config.yaml` | repo | template for the above |
-| `config/browser.json` | `ytmusicapi browser --file config/browser.json` | ytmusicapi headers-auth file (live cookies; sensitive) |
-| `config/buildin_tokens.json` | Buildin menu 1 | OAuth token set: `{access_token, refresh_token, token_type, scope, expires_in, expires_at, client_id, client_secret?, redirect_uri, resource, token_endpoint}`; mode 0600; gitignored |
+| `config/browser.json` | `ytmusicapi browser --file config/browser.json` (optional) | legacy ytmusicapi headers-auth file (live cookies; sensitive); used only when `ytmusic.auth` is absent |
 | `config/buildin_music.json` | Buildin menu 6 | `{page_id, database_id}` cache for the `Music Library` page and `Playlists` database; gitignored |
+| `config/telegram.json` | Telegram listener / menu 4 | `{chats: [<chat id>], allow: [<user id>]}`; gitignored |
+| `config/telegram_mtproto.session` | MTProto transport | Telethon SQLite session (auth key + DC); created on first connect; gitignored |
+| `config/telegram_user.session` | Telegram menu → User: log in | Telethon SQLite session for the **user account** (Saved Messages); gitignored |
 | `data/playlists_map.yaml` | YT menu 5 / user | `Title: {id: PLxxxx, artists: [..]}` |
 | `data/playlists_map_updated.yaml` | YT menu 5 | same schema; staging copy produced by the update command |
 | `data/yamusic.yaml` | Ya menu 4 / user | `Title: {kind: 1084, artists: [..]}` |
@@ -265,7 +299,7 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 ## External dependencies & services
 
 - **Yandex Music** (`yandex-music` 2.2.0): OAuth token; direct connection (no proxy); used for likes, playlists, downloads.
-- **YouTube Music** (`ytmusicapi` 1.11.5): browser-cookie auth via `config/browser.json`; requests routed through SOCKS5 `127.0.0.1:1080`.
+- **YouTube Music** (`ytmusicapi` 1.11.5): browser-cookie auth via `ytmusic.auth` in `config/config.yaml` (legacy `config/browser.json` fallback); requests routed through SOCKS5 `127.0.0.1:1080`.
 - **yt-dlp** (2026.08.19, keep it current) + **ffmpeg**: download & MP3 transcode; same SOCKS5 proxy. Options are passed in code — the Python API does **not** read `~/.config/yt-dlp/config`. YouTube extraction additionally requires a JS runtime (`node` ≥20 or `deno`; default is `deno` only, the code enables both) plus the EJS solver script (`remote_components: ['ejs:github']`, fetched from GitHub once and then cached).
 - **Buildin.ai MCP** (`https://mcp.buildin.ai/message`): optional; direct HTTPS (no SOCKS5), OAuth 2.1 with dynamic client registration and PKCE, no API key. Only used when a Buildin command is invoked.
 
@@ -275,7 +309,7 @@ All YAML in the repo uses UTF-8 with `allow_unicode=True` (Cyrillic/Georgian tit
 2. `--no-proxy`, `--proxy-port` (src/args.py:21,26) and `--log-file` (src/args.py:39) are parsed but unused; proxy is hardcoded in src/ytmusic.py (lines ~78 and ~509).
 3. `YTMusicClient.__init__` performs no lazy init and `main.py` initializes both clients unconditionally — a proxy/network failure blocks startup even for Yandex-only work.
 4. `config/config.yaml` holds a plaintext token; security depends entirely on `.gitignore`.
-5. `config/browser.json` with live cookie hashes was committed to git; it is now gitignored and untracked — the exposed cookies should still be rotated (see AGENTS.md Security).
+5. YouTube auth cookies were committed historically (`config/browser.json`); the file is gitignored and untracked, and the cookies now live in `config/config.yaml` — the exposed ones should still be rotated (see AGENTS.md Security).
 6. No tests, no CI, no non-interactive mode; verification is manual.
 7. Broad `try/except` around library calls hides error details. yt-dlp failures are an exception: `download_track` logs the real reason via `YtdlpLogger` (src/ytmusic.py:27) and returns `None`.
 8. `get_playlist_artists` (YT) assumes `track["artists"]` is present for every track; malformed entries raise.

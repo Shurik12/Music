@@ -13,8 +13,8 @@ Login flow (``BuildinClient.login``):
 1. Discover the protected-resource and authorization-server metadata.
 2. Register a public client dynamically for a temporary ``127.0.0.1`` callback.
 3. Open the Buildin consent page in the browser; wait for the callback.
-4. Exchange the authorization code (PKCE) and store the tokens in
-   ``config/buildin_tokens.json`` (gitignored, mode 0600).
+4. Exchange the authorization code (PKCE) and store the credentials in
+   ``config/config.yaml`` under ``buildin.auth`` (a managed block, mode 0600).
 
 Set ``BUILDIN_ACCESS_TOKEN`` to bypass the stored token (useful for scripts and
 tests); set ``buildin.mcp_url`` in ``config/config.yaml`` to point at another
@@ -36,8 +36,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
+import yaml
 
 from . import paths
+from .config import update_section
 
 DEFAULT_MCP_URL = "https://mcp.buildin.ai/message"
 CALLBACK_PATH = "/callback"
@@ -53,29 +55,59 @@ class BuildinError(RuntimeError):
 
 
 class TokenStore:
-    """JSON token file with owner-only permissions."""
+    """Buildin OAuth credentials stored in the ``buildin.auth`` block of YAML.
 
-    def __init__(self, path: Path):
-        self.path = Path(path)
+    Only the values the MCP flow actually needs are written back, which keeps
+    config/config.yaml readable and free of token-response noise.
+    """
 
-    def load(self) -> Dict[str, Any]:
+    KEEP = (
+        "access_token",
+        "refresh_token",
+        "expires_at",
+        "client_id",
+        "client_secret",
+        "resource",
+        "token_endpoint",
+    )
+
+    def __init__(self, config_path: Path, section: str = "buildin"):
+        self.path = Path(config_path)
+        self.section = section
+
+    def _section(self) -> Dict[str, Any]:
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            config = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         except FileNotFoundError:
             return {}
-        except json.JSONDecodeError as e:
-            raise BuildinError(f"Corrupt Buildin token file {self.path}: {e}") from e
+        except yaml.YAMLError as e:
+            raise BuildinError(f"Corrupt config file {self.path}: {e}") from e
+        if not isinstance(config, dict):
+            return {}
+        section = config.get(self.section) or {}
+        return dict(section) if isinstance(section, dict) else {}
+
+    def load(self) -> Dict[str, Any]:
+        auth = self._section().get("auth")
+        return dict(auth) if isinstance(auth, dict) else {}
+
+    def _write(self, auth: Dict[str, Any]) -> None:
+        section = self._section()
+        if auth:
+            section["auth"] = auth
+        else:
+            section.pop("auth", None)
+        try:
+            update_section(self.path, self.section, section)
+        except ValueError as e:
+            raise BuildinError(str(e)) from e
 
     def save(self, data: Dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
+        auth = {k: data[k] for k in self.KEEP if data.get(k) not in (None, "")}
+        self._write(auth)
 
     def clear(self) -> None:
-        self.path.unlink(missing_ok=True)
+        self._write({})
 
 
 def _pkce_pair() -> Tuple[str, str]:
@@ -133,10 +165,10 @@ class BuildinClient:
     def __init__(
         self,
         mcp_url: str = DEFAULT_MCP_URL,
-        token_file: Optional[Path] = None,
+        config_path: Optional[Path] = None,
     ):
         self.mcp_url = mcp_url
-        self.token_store = TokenStore(token_file or paths.BUILDIN_TOKENS_FILE)
+        self.token_store = TokenStore(config_path or paths.DEFAULT_CONFIG_FILE)
         self.http = requests.Session()
         self.http.headers["User-Agent"] = "MusicCLI/0.1 (Buildin MCP)"
         self._session_id: Optional[str] = None
@@ -157,7 +189,7 @@ class BuildinClient:
             "mcp_url": self.mcp_url,
             "authorized": self.is_authorized(),
             "expires_at": expires_at,
-            "token_file": str(self.token_store.path),
+            "config_file": str(self.token_store.path),
             "resource": data.get("resource"),
         }
 

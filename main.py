@@ -13,6 +13,7 @@ from src import (
     YTMusicClient,
     BuildinClient,
     TelegramClient,
+    TelegramUserClient,
     CLI
 )
 from src.buildin import DEFAULT_MCP_URL
@@ -54,10 +55,16 @@ def main() -> None:
         
         # Initialize clients
         logger.info("Initializing Yandex.Music client...")
-        yamusic = YaMusicHandle(config["token"])
+        yamusic = YaMusicHandle(config["yamusic_token"])
         
         logger.info("Initializing YouTube Music client...")
-        ytmusic = YTMusicClient(str(ytmusic_download_dir))
+        ytmusic_config = config.get("ytmusic") or {}
+        if not isinstance(ytmusic_config, dict):
+            raise ValueError("config 'ytmusic' section must be a mapping")
+        yt_auth = ytmusic_config.get("auth")
+        if yt_auth is not None and not isinstance(yt_auth, dict):
+            raise ValueError("config 'ytmusic.auth' must be a mapping of HTTP headers")
+        ytmusic = YTMusicClient(str(ytmusic_download_dir), auth=yt_auth)
         
         logger.info("Successfully initialized music clients")
         
@@ -66,10 +73,9 @@ def main() -> None:
         if not isinstance(buildin_config, dict):
             raise ValueError("config 'buildin' section must be a mapping")
         buildin_url = buildin_config.get("mcp_url", DEFAULT_MCP_URL)
-        token_file = buildin_config.get("token_file")
         buildin = BuildinClient(
             mcp_url=buildin_url,
-            token_file=paths.resolve(token_file) if token_file else paths.BUILDIN_TOKENS_FILE,
+            config_path=paths.resolve_config(args.config),
         )
         logger.info(f"Buildin MCP endpoint: {buildin_url}")
 
@@ -80,9 +86,16 @@ def main() -> None:
             raise ValueError("config 'telegram' section must be a mapping")
         telegram = TelegramClient(telegram_config)
         logger.info("Telegram bot: configured" if telegram.token else "Telegram bot: not configured (no telegram.token)")
+        # Telegram user account (MTProto session), for Saved Messages / dialogs.
+        # Lazy: no connection until a Telegram menu action needs it.
+        telegram_user = TelegramUserClient(telegram_config)
+        logger.info(
+            "Telegram user session: %s",
+            "configured" if telegram_user.configured else "not configured (no telegram.api_id/api_hash)",
+        )
 
         # Start CLI interface
-        cli = CLI(yamusic, ytmusic, buildin, args, telegram)
+        cli = CLI(yamusic, ytmusic, buildin, args, telegram, telegram_user)
         cli.run()
         
         logger.info("Transfer completed successfully")

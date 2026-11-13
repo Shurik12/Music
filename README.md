@@ -20,14 +20,15 @@ It can:
 - [uv](https://docs.astral.sh/uv/) for dependency management (`uv sync`)
 - Node.js **≥20** (or deno) — yt-dlp needs a JS runtime for YouTube extraction; the EJS solver script is fetched from GitHub on first use and then cached
 - A local SOCKS5 proxy on `127.0.0.1:1080` (e.g. ciadpi; Tor would be `9150`). The YouTube Music API client and yt-dlp are hardcoded to use it — see the [known issues](docs/ARCHITECTURE.md).
-- Accounts / credentials:
-  - Yandex Music OAuth token
-  - YouTube Music browser auth (`config/browser.json`, export with `ytmusicapi browser --file config/browser.json`)
+- Accounts / credentials (stored in `config/config.yaml`, gitignored):
+  - Yandex Music OAuth token (`yamusic_token`)
+  - Telegram bot token / api_id / api_hash / MTProxy secret (optional)
+  - YouTube Music browser auth (`ytmusic.auth` in `config/config.yaml`; legacy `config/browser.json` is still accepted)
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/) — declared in `pyproject.toml`, pinned in `uv.lock`:
 
 ```
-yandex-music  ytmusicapi  tqdm  pyyaml  requests[socks]  yt-dlp
+yandex-music  ytmusicapi  tqdm  pyyaml  requests[socks]  yt-dlp  telethon  qrcode
 ```
 
 ## Setup
@@ -40,17 +41,28 @@ uv sync
 
 # 2. Configuration
 cp config/ex_config.yaml config/config.yaml   # config.yaml is gitignored
-$EDITOR config/config.yaml                     # Yandex Music token (+ optional ytmusic_download_dir)
+$EDITOR config/config.yaml                     # yamusic_token (+ optional settings)
 
-# 3. YouTube Music auth (config/browser.json)
+# 3. YouTube Music auth: export the headers, then merge them into config.yaml
 uv run ytmusicapi browser --file config/browser.json
+uv run python -m src.config_tools inline-browser
 ```
 
-`config/config.yaml` is a flat YAML file:
+`config/config.yaml` holds everything (API tokens, Telegram, YouTube auth,
+Buildin credentials):
 
 ```yaml
-token: "your_yandex_token"
+yamusic_token: "your_yandex_token"
 ytmusic_download_dir: downloads   # optional; where YouTube Music MP3s are saved
+telegram:                         # optional
+  token: "123456789:AAH..."
+  api_id: 1234567
+  api_hash: "..."
+  mtproto: {host: 127.0.0.1, port: 1443, secret: "..."}
+buildin:                          # optional; `auth` is written by the app
+  mcp_url: https://mcp.buildin.ai/message
+ytmusic:                          # managed block; written by src.config_tools
+  auth: {cookie: "__Secure-3PAPISID=...", authorization: "SAPISIDHASH ..."}
 ```
 
 ### Buildin.ai (optional)
@@ -65,8 +77,10 @@ buildin:
 
 Then choose mode `3` in the CLI and run `1` (Log in). The app discovers the
 OAuth metadata, registers a public client dynamically, opens the Buildin
-consent page, and stores tokens in `config/buildin_tokens.json` (gitignored,
-mode `0600`). Tokens refresh automatically; `5` removes them.
+consent page, and stores the credentials in `config/config.yaml` under
+`buildin.auth` (only the fields the client needs: access/refresh token, expiry,
+client id, resource, token endpoint). Tokens refresh automatically and are
+written back in place; `5` (Log out) removes them.
 
 For scripts/tests you can bypass the stored token with `BUILDIN_ACCESS_TOKEN`.
 The client is generic: `3` lists the MCP tools exposed by Buildin and `4`
@@ -96,39 +110,46 @@ import until you delete them in the Buildin UI. Do not rename the `Platform`,
 `External ID` or `Artists` properties. Titles are stored with `:` replaced by
 ` -` to match the YAML key convention.
 
-### Re-exporting browser.json
+### Re-exporting YouTube auth
 
-YouTube auth expires after a while (Google session cookies go stale). Symptoms: empty results from account methods, or the startup warning. To refresh `config/browser.json`:
+YouTube auth expires after a while (Google session cookies go stale). Symptoms: empty results from account methods, or the startup warning. To refresh `ytmusic.auth` in `config/config.yaml`:
 
 1. Log in to https://music.youtube.com and open DevTools (`F12`) → **Network** tab.
 2. Type `browse` in the filter box and reload the page.
 3. Right-click a `browse?prettyPrint=false` **POST** request → **Copy** → **Copy as fetch (Node.js)**.
    - Use the **(Node.js)** variant — plain *Copy as fetch* omits the `Cookie` header, which is exactly what breaks the export.
-4. Run the setup and paste:
+4. Export the headers, then merge them into `config.yaml`:
 
    ```bash
    cd ~/git/Music && uv run ytmusicapi browser --file config/browser.json
    # paste the copied block, then press Ctrl+D
+   uv run python -m src.config_tools inline-browser
    ```
 
-   File-based alternative: save the copied block to `/tmp/yt_headers.txt`, then
+   The merge writes the `ytmusic.auth` block in place (marker-delimited), keeps
+   the rest of the file and is idempotent. `config/browser.json` is no longer
+   used by the app — you can delete it after the merge.
 
-   ```bash
-   uv run python -c "from ytmusicapi.setup import setup; setup('config/browser.json', open('/tmp/yt_headers.txt').read())"
-   ```
+5. Sanity check: the merged headers must include `cookie` with `__Secure-3PAPISID`. `ytmusicapi` silently drops pasted lines that don't contain `': '` — a missing cookie line is the most common export failure.
 
-5. Sanity check: the pasted block must include a line containing `cookie:` with `__Secure-3PAPISID`. `ytmusicapi` silently drops pasted lines that don't contain `': '` — a missing cookie line is the most common export failure.
-
-`config/browser.json` holds live session cookies — never commit it.
+These are live session cookies; `config/config.yaml` is gitignored and mode `0600` — never commit or paste its contents.
 
 ### Telegram (optional)
 
-A Telegram bot (Bot API) that both **reports results** (after transfers,
-downloads, map syncs) and **runs commands** from a chat. It is off until
-configured — startup makes no Telegram requests.
+A Telegram bot that both **reports results** (after transfers, downloads, map
+syncs) and **runs commands** from a chat. It is off until configured — startup
+makes no Telegram requests.
+
+Two transports are supported; the same bot and commands work with either:
+
+| Transport | When to use | Config |
+|-----------|-------------|--------|
+| **Bot API** (default) | the machine can reach `api.telegram.org` | `telegram.token` |
+| **MTProto** (Telethon) | Telegram is blocked and the only egress is a local MTProto proxy (`tg-ws-proxy`, `mtg`, …) | `telegram.token` + `api_id`/`api_hash` + `mtproto:` |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy
-   the token.
+   the token. An MTProto proxy secret is **not** a bot token — you still need
+   the BotFather token.
 2. In `config/config.yaml` add:
 
    ```yaml
@@ -139,13 +160,48 @@ configured — startup makes no Telegram requests.
      # proxy: true        # default; set false to hit api.telegram.org directly
    ```
 
+   If `api.telegram.org` is unreachable, use the MTProto transport instead. Get
+   `api_id`/`api_hash` at [my.telegram.org](https://my.telegram.org) (any app
+   works; the bot itself signs in with its BotFather token):
+
+   ```yaml
+   telegram:
+     token: "123456789:AAH...your_bot_token"
+     api_id: 1234567
+     api_hash: "0123456789abcdef0123456789abcdef"
+     mtproto:
+       host: 127.0.0.1
+       port: 1443
+       secret: "0123456789abcdef0123456789abcdef"
+   ```
+
+   The Telethon session is created at `config/telegram_mtproto.session`
+   (gitignored) on first connect.
+
 3. In the CLI, choose mode **4 (Telegram)**:
-   - **1 Status** — bot identity, chats, proxy.
+   - **1 Status** — bot identity, transport, chats.
    - **2 Send test message** — verify delivery.
    - **3 Broadcast message** — send a manual message to all chats.
    - **4 Allow users** — set a whitelist of Telegram user ids (empty = open).
-   - **5 Start command listener** — long-poll loop that answers bot commands
+   - **5 Start command listener** — command loop that answers bot commands
      (Ctrl+C to stop).
+   - **6 User: status** — state of the separate user-account session.
+   - **7 User: log in** — two ways: **QR** (default — scan with Telegram →
+     Settings → Devices → Link Desktop Device; no code delivery) or a **login
+     code** sent by Telegram to the app/SMS. The two-step password is asked if
+     you set one.
+   - **8 User: Saved Messages** — print the newest notes from your Saved
+     Messages (asks how many, default 20).
+   - **9 User: log out** — revokes that session and deletes its file.
+
+A **bot account cannot see Saved Messages or your chats** — Telegram does not
+allow it. Items 6–9 use a second, *user-account* session (`TelegramUserClient`,
+`src/telegram_user.py`): same `api_id`/`api_hash` and MTProto proxy, its own
+interactive login, and its authorization in `config/telegram_user.session`
+(gitignored). Set `telegram.phone` in the config to skip the phone prompt.
+Programmatic use: `TelegramUserClient(cfg).get_saved_messages(limit=50)` returns
+`{id, date, text, media, out}` rows, newest first; page back with
+`offset_id=<last id>`.
 
 From Telegram, send `/help` to the bot for the command list: `/status`,
 `/playlists`, `/ya`, `/transfer`, `/download`, `/yadownload`, `/liked`, `/maps`,
@@ -154,17 +210,17 @@ finish — long downloads take a while.
 
 Notes:
 
-- The bot talks to `api.telegram.org` **directly** by default (the Bot API works
-  best that way). The app's `tg-ws-proxy` on `1443` is Telegram-*app*-only and
-  does **not** serve the Bot API, so don't use it. If you have a proxy that
-  tunnels `api.telegram.org`, set `telegram.proxy: true` and
-  `telegram.proxy_url: http://127.0.0.1:PORT` (or `socks5://...`).
-  like the rest of the app; set `telegram.proxy: false` to go direct.
+- Without `telegram.mtproto` the bot talks to `api.telegram.org` **directly**.
+  A local `tg-ws-proxy` on `1443` speaks MTProto, not HTTPS, so it cannot be
+  used as an HTTP proxy. If you have a proxy that tunnels `api.telegram.org`,
+  set `telegram.proxy: true` and `telegram.proxy_url: http://127.0.0.1:PORT`
+  (or `socks5://...`) — this uses the Bot API, not MTProto.
 - If no chat is configured, the listener auto-captures the first chat that
   messages the bot and stores it in `config/telegram.json` (gitignored).
 - CLI operations (transfer, downloads, map export) automatically send a
   notification when Telegram is configured.
-- `TELEGRAM_BOT_TOKEN` overrides the stored token for scripts/tests.
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` override the
+  stored values for scripts/tests.
 
 `config/telegram.json` holds the chat allow-list — no secret, but gitignored.
 
@@ -204,7 +260,7 @@ The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music, 
 
 | # | Command | What it does |
 |---|---------|--------------|
-| 1 | Log in | Browser OAuth against `https://mcp.buildin.ai`; tokens saved to `config/buildin_tokens.json` |
+| 1 | Log in | Browser OAuth against `https://mcp.buildin.ai`; credentials saved to `config.yaml` (`buildin.auth`) |
 | 2 | Show status | Prints the MCP endpoint, token file, auth state and token expiry |
 | 3 | List MCP tools | Calls `tools/list` and prints tool names + descriptions |
 | 4 | Call MCP tool | Prompts for a tool name and JSON arguments, calls `tools/call`, prints the result |
@@ -226,7 +282,16 @@ Requires the `telegram:` section in `config/config.yaml` (see [Telegram (optiona
 | 2 | Send test message | Sends a test message to all known chats |
 | 3 | Broadcast message | Prompts for a message and sends it to all known chats |
 | 4 | Allow users | Sets the whitelist of Telegram user ids (empty = open) |
-| 5 | Start command listener | Long-poll loop answering bot commands (`/help` lists them); Ctrl+C stops |
+| 5 | Start command listener | Command loop answering bot commands (`/help` lists them); Ctrl+C stops |
+| 6 | User: status | Prints the user-account session: phone, session path, logged-in account |
+| 7 | User: log in | QR code scan (default, no code needed) or phone → code → two-step password |
+| 8 | User: Saved Messages | Prints the newest Saved Messages (asks count, default 20) |
+| 9 | User: log out | Revokes the user session on Telegram's side and deletes its file |
+
+Items 1–5 use the **bot** account (notifications + commands). Items 6–9 use the
+separate **user-account** session, which is the only way to touch Saved Messages
+or personal dialogs (`TelegramUserClient.get_saved_messages()`); the bot cannot
+see them.
 
 CLI operations (transfer, downloads, map export) also push a notification to
 Telegram automatically when it is configured.
@@ -257,10 +322,9 @@ src/paths.py            Project-wide path constants (anchored to the repo root)
 src/config.py           YAML config loader
 src/args.py             argparse definitions
 src/logger.py           File-only logging setup
-config/config.yaml      Yandex token + settings (gitignored)
+config/config.yaml      Yandex token + Telegram/Buildin credentials (gitignored)
 config/ex_config.yaml   Example config template
-config/browser.json     YouTube Music browser auth (sensitive!, gitignored)
-config/buildin_tokens.json  Buildin OAuth tokens (sensitive!, gitignored)
+config/browser.json     Legacy YouTube auth (optional, gitignored)
 config/buildin_music.json   Cached Buildin page/database IDs (gitignored)
 data/playlists_map.yaml YouTube playlist map: title -> {id, artists}
 data/yamusic.yaml       Yandex playlist map: title -> {kind, artists}
@@ -290,8 +354,8 @@ All paths are anchored to the repository root, so the CLI can be launched from a
 ## Troubleshooting
 
 - **"missing 1 required positional argument: 'id'"** — a Yandex liked track with a broken artist reference; the exporter skips such tracks by design.
-- **YouTube Music returns empty results (no error)** — `config/browser.json` has expired: account endpoints silently return the logged-out view. The app warns about this at startup. Re-export it (see [Re-exporting browser.json](#re-exporting-browserjson)).
-- **`Your cookie is missing the required value __Secure-3PAPISID`** — the exported headers didn't include the `cookie` header. Re-copy using **Copy as fetch (Node.js)** or *Copy request headers* — plain *Copy as fetch* strips cookies — and make sure the paste contains a line starting with `cookie:` (details in [Re-exporting browser.json](#re-exporting-browserjson)).
+- **YouTube Music returns empty results (no error)** — the YouTube auth has expired: account endpoints silently return the logged-out view. The app warns about this at startup. Re-export it (see [Re-exporting YouTube auth](#re-exporting-youtube-auth)).
+- **`Your cookie is missing the required value __Secure-3PAPISID`** — the exported headers didn't include the `cookie` header. Re-copy using **Copy as fetch (Node.js)** or *Copy request headers* — plain *Copy as fetch* strips cookies — and make sure the paste contains a line starting with `cookie:` (details in [Re-exporting YouTube auth](#re-exporting-youtube-auth)).
 - **All YouTube requests fail / time out** — the tool expects a SOCKS5 proxy on `127.0.0.1:1080`. Start ciadpi (or edit the proxy in `src/ytmusic.py`).
 - **Downloads fail with HTTP 403 errors** — usually an outdated yt-dlp (the 2026.3.17 build failed every download; 2026.08.19 works). Update it: `uv lock --upgrade-package yt-dlp && uv sync`. Recent yt-dlp versions need node ≥20 (or deno) and fetch the EJS solver from GitHub on first run. The exact yt-dlp error is logged to `logs/download_log_<timestamp>.log` (see *Known issues* in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - **`config/config.yaml` not found** — you must create it from `config/ex_config.yaml`; it is intentionally gitignored.
@@ -304,9 +368,8 @@ All paths are anchored to the repository root, so the CLI can be launched from a
 
 ## Security notes
 
-- `config/config.yaml` (real token) and `.venv/` are gitignored — keep it that way.
-- `config/browser.json` contains live YouTube auth cookies. It is now gitignored and untracked, but it was committed previously — if this repo was ever pushed anywhere, rotate the cookies (re-run `ytmusicapi browser --file config/browser.json`) and avoid re-adding the file.
-- `config/buildin_tokens.json` contains Buildin OAuth access/refresh tokens. It is gitignored and written with mode `0600`; never commit or paste it.
+- `config/config.yaml` holds the live Yandex token, Telegram credentials and Buildin OAuth tokens; it is gitignored and written with mode `0600` — never commit or paste it.
+- YouTube auth cookies now live in `config/config.yaml` (`ytmusic.auth`), which is gitignored and mode `0600`. The legacy `config/browser.json` (if present) is still honoured as a fallback and stays gitignored. Do not paste their contents anywhere. Re-export procedure: README → *Re-exporting YouTube auth* — use DevTools **Copy as fetch (Node.js)**, not plain *Copy as fetch* (which drops the `Cookie` header).
 - `config/buildin_music.json` only contains Buildin page/database IDs (no secrets) but is gitignored because it is local state.
 - `downloads/`, `logs/` and `__pycache__/` are generated and gitignored.
 

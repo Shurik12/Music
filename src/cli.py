@@ -9,6 +9,7 @@ from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
 from .buildin_maps import MapSyncError, export_maps, import_maps, write_imported_maps
 from .telegram import TelegramClient, TelegramError
+from .telegram_user import TelegramUserClient
 from .telegram_commands import create_handler
 
 
@@ -47,16 +48,22 @@ class CLI:
         "Broadcast message",
         "Allow users (whitelist)",
         "Start command listener",
+        "User: status (account session)",
+        "User: log in (code or QR)",
+        "User: Saved Messages",
+        "User: log out",
     ]
 
     def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient,
                  buildin: BuildinClient, args,
-                 telegram: Optional[TelegramClient] = None) -> None:
+                 telegram: Optional[TelegramClient] = None,
+                 telegram_user: Optional[TelegramUserClient] = None) -> None:
         self.yamusic = yamusic
         self.ytmusic = ytmusic
         self.buildin = buildin
         self.args = args
         self.telegram = telegram
+        self.telegram_user = telegram_user
         self.running = True
         self.mode: Optional[str] = None  # 'ytmusic', 'yamusic', 'buildin' or 'telegram'
 
@@ -249,7 +256,8 @@ class CLI:
     def buildin_status(self) -> None:
         status = self.buildin.status()
         print(f"  MCP endpoint: {color.cyan(status['mcp_url'])}")
-        print(f"  Token file:   {status['token_file']}")
+        print(f"  Config file:  {status['config_file']}")
+        print(f"  Credentials:  {color.cyan('buildin.auth')} (written by the app)")
         if not status["authorized"]:
             print(f"  Status:       {color.red('not authorized')} (run Log in first)")
             return
@@ -437,15 +445,22 @@ class CLI:
             print(color.red("Not configured (missing token)."))
             return
         print(f"  Bot:        {color.cyan('@' + (info.get('bot_username') or 'unknown'))}")
-        print(f"  API base:   {info['api_base']}")
-        print(f"  Proxy:      {color.green('on') if info['proxy'] else color.red('off')}")
+        if info.get("transport") == "mtproto":
+            print(f"  Transport:  {color.cyan('MTProto')} via {info['endpoint']}")
+        else:
+            print(f"  API base:   {info['api_base']}")
+            print(f"  Proxy:      {color.green('on') if info['proxy'] else color.red('off')}")
         print(f"  Chats:      {info['chats'] or color.yellow('(none — run Start listener to auto-capture)')}")
         allowed = info["allow"] if info["allow"] else "anyone (open)"
         print(f"  Allowed:    {allowed}")
         if info.get("error"):
             print(color.yellow(f"  Note: {info['error']}"))
-            print(color.yellow("  → Can't reach api.telegram.org. If this network blocks Telegram,"))
-            print(color.yellow("    run the listener on a machine that can reach it (or set telegram.proxy)."))
+            if info.get("transport") == "mtproto":
+                print(color.yellow("  → MTProto connect failed. Check telegram.api_id / api_hash (my.telegram.org)"))
+                print(color.yellow("    and telegram.mtproto (host/port/secret, proxy running)."))
+            else:
+                print(color.yellow("  → Can't reach api.telegram.org. If this network blocks Telegram,"))
+                print(color.yellow("    configure telegram.mtproto or run the listener on a machine that can reach it."))
 
     def telegram_test(self) -> None:
         tg = self._need_telegram()
@@ -507,6 +522,100 @@ class CLI:
             print(color.red(f"Listener stopped: {e}"))
         except KeyboardInterrupt:
             print(color.cyan("\nListener stopped."))
+
+    # ------------------------------------------------- Telegram user account
+    def _need_telegram_user(self) -> Optional[TelegramUserClient]:
+        """Return the user-account client, or None with a message if unusable."""
+        if self.telegram_user is None:
+            print(color.red("Telegram user session is not configured (no telegram.api_id/api_hash)."))
+            return None
+        if not self.telegram_user.configured:
+            print(color.red("Telegram user session needs telegram.api_id and telegram.api_hash (my.telegram.org)."))
+            return None
+        return self.telegram_user
+
+    def telegram_user_status(self) -> None:
+        tu = self._need_telegram_user()
+        if tu is None:
+            return
+        try:
+            info = tu.status()
+        except TelegramError as e:
+            print(color.red(f"User session status failed: {e}"))
+            return
+        print(f"  Session:    {info['session']}")
+        phone = info["phone"] or color.yellow("(not set — you will be asked at login)")
+        print(f"  Phone:      {phone}")
+        if info["authorized"]:
+            who = info.get("name") or "unknown"
+            if info.get("username"):
+                who += f" (@{info['username']})"
+            print(f"  Account:    {color.cyan(who)}  id {info.get('id')}")
+        else:
+            print(f"  Account:    {color.yellow('not logged in — run User: log in')}")
+        if info.get("error"):
+            print(color.yellow(f"  Note: {info['error']}"))
+
+    def telegram_user_login(self) -> None:
+        tu = self._need_telegram_user()
+        if tu is None:
+            return
+        print("  Login method:")
+        print("    1) QR code — scan with your phone (recommended, no code)")
+        print("    2) login code sent by Telegram (app/SMS)")
+        print("    3) SMS code (forced)")
+        choice = input("Choose [1/2/3] (default 1): ").strip() or "1"
+        try:
+            if choice == "2":
+                me = tu.login()
+            elif choice == "3":
+                me = tu.login(force_sms=True)
+            else:
+                me = tu.login_qr()
+        except TelegramError as e:
+            print(color.red(f"Login failed: {e}"))
+            return
+        except KeyboardInterrupt:
+            print(color.cyan("\nLogin cancelled."))
+            return
+        who = me.get("name") or "unknown"
+        if me.get("username"):
+            who += f" (@{me['username']})"
+        print(color.green(f"Logged in as {who} (id {me.get('id')})."))
+
+    def telegram_saved(self) -> None:
+        """Print the newest messages from the account's Saved Messages."""
+        tu = self._need_telegram_user()
+        if tu is None:
+            return
+        raw = input("How many messages (default 20): ").strip()
+        limit = int(raw) if raw.isdigit() and int(raw) > 0 else 20
+        try:
+            messages = tu.get_saved_messages(limit=limit)
+        except TelegramError as e:
+            print(color.red(f"Could not read Saved Messages: {e}"))
+            return
+        if not messages:
+            print(color.yellow("Saved Messages is empty."))
+            return
+        print(color.cyan(f"  Saved Messages — {len(messages)} message(s), newest first:"))
+        for m in messages:
+            text = " ".join((m["text"] or "").split())
+            if len(text) > 200:
+                text = text[:197] + "…"
+            media = f" [{m['media']}]" if m["media"] else ""
+            print(f"  #{m['id']}  {m['date']}{media}")
+            print(f"    {text or '(no text)'}")
+
+    def telegram_user_logout(self) -> None:
+        tu = self._need_telegram_user()
+        if tu is None:
+            return
+        if input("Log out the Telegram user session? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+        tu.logout()
+        print(color.green("User session logged out and session file removed."))
 
     def run(self) -> None:
         """Main CLI loop"""
@@ -622,6 +731,10 @@ class CLI:
             self.telegram_broadcast,
             self.telegram_allow,
             self.telegram_listen,
+            self.telegram_user_status,
+            self.telegram_user_login,
+            self.telegram_saved,
+            self.telegram_user_logout,
         ]
         cmds[idx]()
         self._pause()

@@ -84,7 +84,7 @@ Buildin network calls.
 
 | # | Action | Implementation | Side effects / notes |
 |---|--------|----------------|----------------------|
-| 1 | Log in | `buildin_login` (src/cli.py) → `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes `config/buildin_tokens.json` (0600) |
+| 1 | Log in | `buildin_login` (src/cli.py) → `BuildinClient.login` (src/buildin.py:164) | Discovers OAuth metadata, dynamically registers a public client, opens the browser, waits up to 300s for a `127.0.0.1` callback, exchanges the code (PKCE S256); writes credentials to `config/config.yaml` (`buildin.auth`) |
 | 2 | Status | `buildin_status` (src/cli.py) → `BuildinClient.status` (src/buildin.py:153) | Prints endpoint, token file, authorization state and expiry; no network |
 | 3 | List MCP tools | `buildin_tools` (src/cli.py) → `BuildinClient.list_tools` (src/buildin.py:227) | Calls `tools/list`; auto-login if needed; prints names + descriptions |
 | 4 | Call MCP tool | `buildin_call_tool` (src/cli.py) → `BuildinClient.call_tool` (src/buildin.py:231) | Prompts for tool name + JSON object; calls `tools/call`; prints text content or raw JSON |
@@ -121,7 +121,7 @@ All paths are relative to the repository root (see `src/paths.py`).
 | Ya 1 | `logs/tracks.json` (or `--output`) |
 | Ya 2/3 | `downloads/<Playlist>/*.mp3` |
 | Ya 4 | `data/temp_playlist_map.yaml` |
-| Buildin 1 | `config/buildin_tokens.json` |
+| Buildin 1 | `config/config.yaml` (`buildin.auth` block) |
 | Buildin 6 | Buildin page/database; `config/buildin_music.json` (ID cache) |
 | Buildin 7 | `data/playlists_map.yaml`, `data/yamusic.yaml` (+ `.bak` copies) |
 | every run | `logs/music_api_<timestamp>.log` |

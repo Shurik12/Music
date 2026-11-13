@@ -1,35 +1,50 @@
-"""Telegram Bot API client.
+"""Telegram client for the Music app.
 
-Self-contained: it only uses ``requests`` (already a project dependency), so no
-extra library is needed. It covers the two things this app wants from Telegram:
+Two transports, one API:
+
+* **Bot API** (default) — HTTPS calls to ``api.telegram.org`` using ``requests``.
+  Simple and dependency-free, but it needs a network that can reach Telegram.
+* **MTProto** (opt-in) — a Telethon client tunnelled through an MTProxy. Use this
+  when ``api.telegram.org`` is blocked/unreachable and the only egress is a local
+  MTProto proxy (the app's ``tg-ws-proxy`` on ``127.0.0.1:1443``, ``mtg``, …).
+  An MTProxy secret is *not* a BotFather token — a bot token is still required,
+  the proxy only carries the MTProto stream.
+
+Both transports expose the same methods to the rest of the app:
 
 * **send** — push a message to the configured chat(s) after sync/download work;
-* **listen** — run a long-polling command loop that dispatches incoming
-  commands to the application and reports the results back to the chat.
+* **listen** — run a long-polling (Bot API) or event-driven (MTProto) command
+  loop that dispatches incoming commands to the application.
 
 Only users whose id is in the ``allow`` list may run commands; everyone else is
 told they are not authorized and their message is ignored.
 
 Configuration comes from the ``telegram:`` section of ``config/config.yaml``
-(see ``config/ex_config.yaml``): ``token`` (required, the BotFather token) and
-``chats`` (a list of chat ids, optional — if omitted, the poller auto-captures
-the first chat that talks to the bot). ``chats`` and the captured id are
-persisted in ``config/telegram.json`` (gitignored).
+(see ``config/ex_config.yaml``):
 
-The Bot API endpoint defaults to ``https://api.telegram.org``. When a SOCKS5
-proxy is configured (see ``_proxy_for``) the session routes through it, matching
-the rest of the app's networking; set ``api_base`` in config to override.
+* ``token`` (required) — the BotFather token (``TELEGRAM_BOT_TOKEN`` overrides);
+* ``chats`` (optional) — chat ids; otherwise the first chat that talks to the
+  bot is captured. Chats and the allow-list persist in ``config/telegram.json``;
+* Bot API only: ``api_base``, ``proxy`` / ``proxy_url`` (HTTPS/SOCKS proxy);
+* MTProto only: ``mtproto: {host, port, secret}`` plus ``api_id`` / ``api_hash``
+  from my.telegram.org. The Telethon session lives in
+  ``config/telegram_mtproto.session`` (gitignored).
 
-``TELEGRAM_BOT_TOKEN`` overrides the stored token for scripts/tests.
+``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_API_ID`` / ``TELEGRAM_API_HASH`` override the
+stored values for scripts/tests.
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 import socket
+import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -40,6 +55,8 @@ from . import paths
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE = "https://api.telegram.org"
+DEFAULT_MTPROXY_HOST = "127.0.0.1"
+DEFAULT_MTPROXY_PORT = 1443
 REQUEST_TIMEOUT = 30
 POLL_TIMEOUT = 30
 # Some networks resolve api.telegram.org to IPv6 only (no IPv6 route), which
@@ -51,6 +68,7 @@ API_HOST = "api.telegram.org"
 # `telegram.proxy: false` to bypass). This is the app's HTTP CONNECT proxy
 # (tg-ws-proxy); it tunnels HTTPS, so use an `http://` scheme. Override with
 # `telegram.proxy_url` in config if you point at a SOCKS5 proxy instead.
+# For an MTProto-only proxy use `telegram.mtproto` instead (see module docs).
 PROXY_URL = "http://127.0.0.1:1443"
 
 
@@ -59,7 +77,6 @@ class TelegramError(RuntimeError):
 
 
 class _State:
-    """Small JSON state file (chat allow-list) with owner-only permissions."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -75,27 +92,14 @@ class _State:
 
     def save(self, data: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def _resolve(host: str, port: int, family: int = 0, type: int = 0,
-             proto: int = 0, flags: int = 0) -> List[tuple]:
-    """Resolve a host, preferring IPv4.
-
-    Mirrors ``socket.getaddrinfo`` (accepts 2–6 args). Returns the normal
-    result, but for the Telegram API host — if it resolves to IPv6 only (no
-    IPv4 route on the network) — it prepends a known-good IPv4 address so the
-    connection can go down the working IPv4 path (direct mode).
-    """
-    try:
-        result = _orig_getaddrinfo(host, port, family, type, proto, flags)
-    except socket.gaierror:
-        return []
-    has_ipv4 = any(family_ == socket.AF_INET for family_, *_ in result)
-    if (not has_ipv4) and (host in (API_HOST, API_TELEGRAM_IPV4)):
+def _resolve(host: str, port: int, *args, **kwargs):
+    """getaddrinfo hook that prepends the known IPv4 address for Telegram."""
+    result = _orig_getaddrinfo(host, port, *args, **kwargs)
+    if host == API_HOST:
         try:
             result = _orig_getaddrinfo(
                 API_TELEGRAM_IPV4, port, socket.AF_INET, socket.SOCK_STREAM
@@ -111,12 +115,19 @@ _orig_getaddrinfo = socket.getaddrinfo
 socket.getaddrinfo = _resolve
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _proxy_for(config: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """Return proxy settings if the config wants a proxy for Telegram.
+    """Return proxy settings if the config wants an HTTP/SOCKS proxy for Telegram.
 
     Off by default: the Telegram Bot API works best direct, and the app's
-    ``tg-ws-proxy`` on ``1443`` is Telegram-app-only (it does not serve the
-    Bot API over HTTPS). Enable it with ``telegram.proxy: true`` and point
+    ``tg-ws-proxy`` on ``1443`` speaks MTProto (see ``_mtproto_for``), not
+    HTTPS. Enable it with ``telegram.proxy: true`` and point
     ``telegram.proxy_url`` at a proxy that actually tunnels ``api.telegram.org``.
     """
     proxy = config.get("proxy", False)
@@ -126,8 +137,142 @@ def _proxy_for(config: Dict[str, Any]) -> Optional[Dict[str, str]]:
     return {"http": url, "https": url}
 
 
+def _mtproto_for(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return MTProxy settings when ``telegram.mtproto`` is configured."""
+    section = config.get("mtproto") or config.get("mtproxy")
+    if not section:
+        return None
+    if not isinstance(section, dict):
+        raise TelegramError("config 'telegram.mtproto' must be a mapping")
+    secret = str(section.get("secret") or "").strip()
+    if not secret:
+        raise TelegramError(
+            "telegram.mtproto.secret is required (the proxy secret, not a bot token)"
+        )
+    return {
+        "host": str(section.get("host") or DEFAULT_MTPROXY_HOST),
+        "port": _as_int(section.get("port"), DEFAULT_MTPROXY_PORT),
+        "secret": secret,
+    }
+
+
+class MTProtoSession:
+    """Owns a background asyncio loop and one Telethon client bound to it.
+
+    Telethon binds a client to the loop that is running when it is constructed,
+    so the client is created *inside* the loop thread and every coroutine is
+    submitted there. One session file = one logged-in account (bot or user).
+
+    ``proxy`` is an optional ``(host, port, secret)`` MTProxy tuple; without it
+    Telethon connects to Telegram directly (only works where that is reachable).
+    """
+
+    def __init__(
+        self,
+        session_path: Path,
+        api_id: Any,
+        api_hash: Any,
+        proxy: Optional[tuple] = None,
+    ) -> None:
+        self.session_path = Path(session_path)
+        self.api_id = _as_int(api_id)
+        self.api_hash = str(api_hash or "")
+        self.proxy = tuple(proxy) if proxy else None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._client: Any = None
+        self._loop_lock = threading.Lock()
+
+    # ----------------------------------------------------------- loop plumbing
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._loop_lock:
+            if self._loop is None:
+                loop = asyncio.new_event_loop()
+                thread = threading.Thread(
+                    target=self._loop_main,
+                    args=(loop,),
+                    name="telegram-mtproto",
+                    daemon=True,
+                )
+                thread.start()
+                self._loop, self._thread = loop, thread
+        return self._loop
+
+    @staticmethod
+    def _loop_main(loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    def run(self, coro, timeout: Optional[float] = REQUEST_TIMEOUT) -> Any:
+        """Run a coroutine on the background loop and wait for its result."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout)
+        except concurrent.futures.TimeoutError as e:
+            future.cancel()
+            raise TelegramError(
+                f"Telegram MTProto request timed out after {timeout}s"
+            ) from e
+        except TelegramError:
+            raise
+        except Exception as e:
+            raise TelegramError(f"Telegram MTProto request failed: {e}") from e
+
+    # ------------------------------------------------------------------ client
+    def _make_client(self):
+        try:
+            from telethon import TelegramClient as _Telethon
+            from telethon.network import (
+                ConnectionTcpMTProxyRandomizedIntermediate,
+            )
+        except ImportError as e:
+            raise TelegramError(
+                "MTProto transport requires the `telethon` package"
+            ) from e
+        kwargs: Dict[str, Any] = {}
+        if self.proxy:
+            kwargs["connection"] = ConnectionTcpMTProxyRandomizedIntermediate
+            kwargs["proxy"] = self.proxy
+        with warnings.catch_warnings():
+            # Telethon warns about its python-socks HTTP proxy support; the
+            # MTProxy tuple is consumed by the connection class instead.
+            warnings.filterwarnings(
+                "ignore", message="proxy argument will be ignored.*"
+            )
+            return _Telethon(
+                str(self.session_path), self.api_id, self.api_hash, **kwargs
+            )
+
+    async def client(self):
+        """Return the connected Telethon client, creating it on first use."""
+        if self._client is None:
+            self._client = self._make_client()
+        if not self._client.is_connected():
+            await self._client.connect()
+        return self._client
+
+    def connect(self):
+        """Ensure the client is connected and return it (blocking)."""
+        return self.run(self.client(), timeout=60)
+
+    def close(self) -> None:
+        """Disconnect the client (used when throwing a session away)."""
+        if self._client is None:
+            return
+        try:
+            self.run(self._client.disconnect(), timeout=10)
+        except TelegramError:
+            pass
+        self._client = None
+
+
 class TelegramClient:
-    """Minimal Bot API client: message sending plus a long-poll command loop."""
+    """Telegram client: message sending plus a command loop.
+
+    The transport is picked in ``__init__``: ``telegram.mtproto`` selects
+    MTProto/Telethon, otherwise the Bot API over ``requests`` is used.
+    """
 
     def __init__(
         self,
@@ -137,6 +282,10 @@ class TelegramClient:
         config = dict(config or {})
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN") or config.get("token") or ""
         self.api_base = (config.get("api_base") or DEFAULT_API_BASE).rstrip("/")
+        self.api_id = _as_int(os.environ.get("TELEGRAM_API_ID") or config.get("api_id"))
+        self.api_hash = str(
+            os.environ.get("TELEGRAM_API_HASH") or config.get("api_hash") or ""
+        )
         self.chats: List[Any] = list(config.get("chats") or [])
         self.allow: List[int] = []
         self.state = _State(token_file or paths.TELEGRAM_STATE_FILE)
@@ -148,12 +297,41 @@ class TelegramClient:
             self.chats = list(stored["chats"])
         if stored.get("allow"):
             self.allow = list(stored["allow"])
+        self._mtproto = _mtproto_for(config)
         self._proxy = _proxy_for(config)
         self.http = requests.Session()
         if self._proxy:
             self.http.proxies.update(self._proxy)
+        # Telethon state: a shared loop+client wrapper plus the client handle.
+        # Created lazily so an unconfigured/unused bot makes no network or
+        # thread activity at startup.
+        self._conn: Optional[MTProtoSession] = (
+            MTProtoSession(
+                paths.TELEGRAM_SESSION_FILE,
+                self.api_id,
+                self.api_hash,
+                (self._mtproto["host"], self._mtproto["port"], self._mtproto["secret"]),
+            )
+            if self._mtproto
+            else None
+        )
+        self._tg: Any = None
+        self._authorized = False
+        self._tg_lock = threading.Lock()
 
     # ------------------------------------------------------------------ utils
+    @property
+    def transport(self) -> str:
+        """``"mtproto"`` when a proxy is configured, else ``"bot-api"``."""
+        return "mtproto" if self._mtproto else "bot-api"
+
+    @property
+    def endpoint(self) -> str:
+        """Human-readable endpoint description for the CLI status screen."""
+        if self._mtproto:
+            return f"{self._mtproto['host']}:{self._mtproto['port']}"
+        return self.api_base
+
     def _url(self, method: str) -> str:
         if not self.token:
             raise TelegramError(
@@ -202,9 +380,66 @@ class TelegramClient:
                 raise TelegramError(f"Telegram {method} failed: {last_error}")
         return data.get("result")
 
+    # ----------------------------------------------------------- MTProto core
+    def _run(self, coro, timeout: Optional[float] = REQUEST_TIMEOUT) -> Any:
+        """Run a coroutine on the shared background loop (MTProto transport)."""
+        return self._conn.run(coro, timeout)
+
+    def _ensure_tg(self):
+        """Connect and authenticate the Telethon bot client, then return it."""
+        if not self.token:
+            raise TelegramError(
+                "Telegram token is not configured "
+                "(add `telegram.token` to config/config.yaml)"
+            )
+        if self._conn is None:
+            raise TelegramError("MTProto transport is not configured")
+        if not self.api_id or not self.api_hash:
+            raise TelegramError(
+                "MTProto transport needs `telegram.api_id` and "
+                "`telegram.api_hash` from my.telegram.org"
+            )
+        with self._tg_lock:
+            client = self._conn.connect()
+            if not self._authorized:
+                logger.info(
+                    "Connecting Telegram MTProto via %s:%s",
+                    self._mtproto["host"],
+                    self._mtproto["port"],
+                )
+                if not self._run(client.is_user_authorized(), timeout=30):
+                    self._run(client.sign_in(bot_token=self.token), timeout=60)
+                self._authorized = True
+            self._tg = client
+            return client
+
+    def _mtproto_send(self, chat_id: Any, text: str) -> None:
+        client = self._ensure_tg()
+        payload = text[:4096]
+        try:
+            peer = int(chat_id)
+        except (TypeError, ValueError):
+            peer = chat_id
+
+        async def _send() -> None:
+            await client.send_message(peer, payload, link_preview=False)
+
+        self._run(_send())
+
+    def _mtproto_me(self) -> Dict[str, Any]:
+        client = self._ensure_tg()
+        me = self._run(client.get_me())
+        return {
+            "id": getattr(me, "id", None),
+            "username": getattr(me, "username", None),
+        }
+
     # ------------------------------------------------------------------- send
     def send_message(self, chat_id: Any, text: str) -> None:
         """Send a plain-text message to one chat."""
+        if self._mtproto:
+            self._mtproto_send(chat_id, text)
+            return
         self._call(
             "sendMessage",
             chat_id=chat_id,
@@ -271,9 +506,12 @@ class TelegramClient:
         self,
         handler: Callable[[Dict[str, Any], str], Optional[str]],
     ) -> None:
-        """Blocking long-poll loop. ``handler`` returns reply text (or None)."""
+        """Blocking command loop. ``handler`` returns reply text (or None)."""
         if not self.token:
             raise TelegramError("Telegram token is not configured")
+        if self._mtproto:
+            self._run_mtproto_commands(handler)
+            return
         # If no chat is known yet, capture the first one that contacts us so
         # broadcast() has somewhere to send.
         if not self.chats:
@@ -312,12 +550,74 @@ class TelegramClient:
                 )
                 break
 
+    def _run_mtproto_commands(
+        self,
+        handler: Callable[[Dict[str, Any], str], Optional[str]],
+    ) -> None:
+        """Event-driven command loop for the MTProto transport."""
+        try:
+            from telethon import events
+        except ImportError as e:
+            raise TelegramError("MTProto transport requires the `telethon` package") from e
+        client = self._ensure_tg()
+
+        async def on_message(event) -> None:
+            text = event.raw_text or ""
+            if not text:
+                return
+            chat_id = event.chat_id
+            user_id = event.sender_id
+            if not self.chats:
+                # Keep broadcast() working: remember where the first message came from.
+                self.add_chat(chat_id)
+                await client.send_message(
+                    chat_id,
+                    f"✅ Music bot connected. Chat {chat_id} registered — "
+                    "you can now send /help",
+                )
+            if user_id is not None and not self.is_authorized(user_id):
+                await client.send_message(
+                    chat_id, "You are not authorized to use this bot."
+                )
+                return
+            # The command layer expects a Bot API update shape.
+            update = {
+                "message": {
+                    "chat": {"id": chat_id},
+                    "from": {"id": user_id},
+                    "text": text,
+                }
+            }
+            # Handlers do blocking work (downloads, transfers) — keep the loop free.
+            reply = await asyncio.get_running_loop().run_in_executor(
+                None, handler, update, text
+            )
+            if reply:
+                await client.send_message(
+                    chat_id, str(reply)[:4096], link_preview=False
+                )
+
+        client.add_event_handler(on_message, events.NewMessage(incoming=True))
+        logger.info("Telegram MTProto listener started (%s)", self.endpoint)
+        try:
+            self._run(client.run_until_disconnected(), timeout=None)
+        except TelegramError as e:
+            logger.warning("Telegram MTProto listener stopped: %s", e)
+            raise
+        finally:
+            try:
+                self._run(client.disconnect(), timeout=10)
+            except TelegramError:
+                pass
+
     # ----------------------------------------------------------------- status
     def status(self) -> Dict[str, Any]:
         """Summary for the CLI status screen."""
         if not self.token:
             return {
                 "configured": False,
+                "transport": self.transport,
+                "endpoint": self.endpoint,
                 "chats": [],
                 "allow": [],
                 "api_base": self.api_base,
@@ -325,13 +625,15 @@ class TelegramClient:
             }
         info: Dict[str, Any] = {
             "configured": True,
+            "transport": self.transport,
+            "endpoint": self.endpoint,
             "chats": self.chats,
             "allow": self.allow,
             "api_base": self.api_base,
-            "proxy": bool(self._proxy),
+            "proxy": bool(self._proxy or self._mtproto),
         }
         try:
-            me = self._call("getMe")
+            me = self._mtproto_me() if self._mtproto else self._call("getMe")
             info["bot_username"] = me.get("username")
             info["bot_id"] = me.get("id")
         except TelegramError as e:
