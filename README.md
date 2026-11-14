@@ -12,6 +12,7 @@ It can:
 - Track already-downloaded tracks per playlist with `track_map_*.yaml` files (resumable downloads).
 - Optional **Buildin.ai** integration over MCP (OAuth login, generic tool browser) as a foundation for music ↔ Buildin workflows.
 - Optional **Telegram bot** (Bot API): push notifications after sync/downloads and run commands (`/transfer`, `/download`, …) from a chat.
+- Optional **Yandex Disk** (REST): list, upload, download and delete files/folders (paste a Yandex OAuth token, auto-refreshing).
 
 ## Requirements
 
@@ -24,6 +25,7 @@ It can:
   - Yandex Music OAuth token (`yamusic_token`)
   - Telegram bot token / api_id / api_hash / MTProxy secret (optional)
   - YouTube Music browser auth (`ytmusic.auth` in `config/config.yaml`; legacy `config/browser.json` is still accepted)
+  - Yandex Disk OAuth token — written by the app under `yandex_disk.auth` after a paste-token login (optional)
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/) — declared in `pyproject.toml`, pinned in `uv.lock`:
 
@@ -224,13 +226,44 @@ Notes:
 
 `config/telegram.json` holds the chat allow-list — no secret, but gitignored.
 
+### Yandex Disk (optional)
+
+File operations on your Yandex Disk: list, upload, download and delete. It is
+off until configured — startup makes no Yandex requests.
+
+1. In the CLI choose mode **5 (Yandex Disk)** → **1 Log in**. The login asks you
+   to paste a **Yandex OAuth access token** (and, optionally, a refresh token).
+   You can get one either from a Yandex app at https://developer.yandex.com
+   (create the app with the "Cloud Disk" product), or — simplest — by reusing
+   the general-purpose Yandex token you already use for Yandex Music
+   (`yamusic_token`), which the Disk API also accepts. The token is stored under
+   `yandex_disk.auth` (gitignored, mode `0600`) and, if it carries a refresh
+   token, auto-refreshed. `7` (Log out) removes it.
+   (The browser/device OAuth flows do not work with Yandex's public Music client,
+   which is why login is paste-based.)
+2. The menu:
+   - **2 Status** — API base, scope, token state/expiry.
+   - **3 List directory** — prompt for a Disk path (default `/`) and print its items.
+   - **4 Download file** — prompt for a Disk file path and a local destination
+     (default `downloads/yandex_disk/<name>`).
+   - **5 Upload file** — prompt for a local file and a Disk target path (two-step
+     reserve/commit; asks to confirm overwriting an existing file).
+   - **6 Delete file/folder** — prompt for a Disk path, asks for confirmation,
+     then deletes it (**destructive**).
+   - **7 Log out** — remove the stored Yandex Disk token.
+
+Commands 3, 4, 5 and 6 start the login flow automatically when not authorized.
+For scripts/tests you can bypass the stored token with `YANDEX_DISK_TOKEN`.
+The Disk client uses its own `requests` session that ignores the system proxy
+(`trust_env=False`), since Yandex is reachable directly.
+
 ## Usage
 
 ```bash
 uv run main.py             # or: make run
 ```
 
-The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music, Buildin AI or Telegram), then issue commands.
+The tool is an interactive menu. Pick an API mode (YouTube Music, Yandex Music, Buildin AI, Telegram or Yandex Disk), then issue commands.
 
 ### YouTube Music mode
 
@@ -296,6 +329,23 @@ see them.
 CLI operations (transfer, downloads, map export) also push a notification to
 Telegram automatically when it is configured.
 
+### Yandex Disk mode
+
+| # | Command | What it does |
+|---|---------|--------------|
+| 1 | Log in | Prompts for a Yandex OAuth access token (and optional refresh token) to paste — from developer.yandex.com or reused from `yamusic_token`; stores it in `config.yaml` (`yandex_disk.auth`) |
+| 2 | Show status | Prints the API base, scope, config file and token state/expiry |
+| 3 | List directory | Prompts for a Disk path and prints its items (name, type, size) |
+| 4 | Download file | Prompts for a Disk file path and a local destination, then downloads it |
+| 5 | Upload file | Prompts for a local file and a Disk target path; reserve/commit, with overwrite confirmation |
+| 6 | Delete file/folder | Prompts for a Disk path and a confirmation, then deletes it (**destructive**) |
+| 7 | Log out | Removes the stored Yandex Disk token |
+
+Commands 3, 4, 5 and 6 start the login flow automatically when not authorized.
+The client talks to `https://api.yandex.net/disk/` with a `requests` session that
+bypasses the system proxy, refreshes the token when it nears expiry, and retries
+once on an HTTP 401. `YANDEX_DISK_TOKEN` overrides the stored token.
+
 ### CLI flags
 
 ```
@@ -318,6 +368,7 @@ src/color.py            ANSI color helpers (auto-disabled by NO_COLOR=1)
 src/track.py            Track named tuple (artist, name)
 src/buildin.py          Buildin.ai MCP client (OAuth login, tool calls)
 src/buildin_maps.py     Playlist-map sync with a Buildin database
+src/yandex_disk.py      Yandex Disk REST client (paste-token login, list/upload/download/delete)
 src/paths.py            Project-wide path constants (anchored to the repo root)
 src/config.py           YAML config loader
 src/args.py             argparse definitions
@@ -371,6 +422,7 @@ All paths are anchored to the repository root, so the CLI can be launched from a
 - `config/config.yaml` holds the live Yandex token, Telegram credentials and Buildin OAuth tokens; it is gitignored and written with mode `0600` — never commit or paste it.
 - YouTube auth cookies now live in `config/config.yaml` (`ytmusic.auth`), which is gitignored and mode `0600`. The legacy `config/browser.json` (if present) is still honoured as a fallback and stays gitignored. Do not paste their contents anywhere. Re-export procedure: README → *Re-exporting YouTube auth* — use DevTools **Copy as fetch (Node.js)**, not plain *Copy as fetch* (which drops the `Cookie` header).
 - `config/buildin_music.json` only contains Buildin page/database IDs (no secrets) but is gitignored because it is local state.
+- The Yandex Disk token lives in `config/config.yaml` (`yandex_disk.auth`) — gitignored and mode `0600`. It is written only by the app after a paste-token login and removed by `Yandex Disk → Log out`. Never paste its contents. `YANDEX_DISK_TOKEN` overrides it for scripts.
 - `downloads/`, `logs/` and `__pycache__/` are generated and gitignored.
 
 ## More documentation

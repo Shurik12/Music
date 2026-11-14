@@ -36,7 +36,7 @@ uv run main.py [flags]         # or: make run
 
 **Flow:**
 
-1. **Mode selection** (curses): YouTube Music / Yandex Music / Buildin AI. `q`/`Esc` exits.
+1. **Mode selection** (curses): YouTube Music / Yandex Music / Buildin AI / Telegram / Yandex Disk. `q`/`Esc` exits.
 2. Inside a mode (curses sub-menu): navigate, select a command. `q`/`Esc` returns to mode selection.
 3. After a command completes, `_pause()` prints `Press Enter to continue...` and waits — results stay on screen.
 4. `Ctrl+C` quits gracefully; unexpected exceptions print a red `Error: ...` and return to the menu.
@@ -108,6 +108,36 @@ Buildin map model (src/buildin_maps.py):
 - Buildin has no record-deletion tool: locally removed playlists are reported
   as orphaned by export and must be deleted in the Buildin UI.
 
+## Yandex Disk mode
+
+Handler: `_dispatch_yandex_disk(idx)` (src/cli.py). Menu items in `CLI.YANDEX_DISK_MENU`.
+The client is `YandexDiskClient` (src/yandex_disk.py); it talks to the REST
+API at `https://api.yandex.net/disk/` with a `requests` session that ignores the
+system proxy (`trust_env=False`). Authentication is a general-purpose Yandex
+OAuth token, auto-refreshed and persisted under `yandex_disk.auth` in
+`config/config.yaml`. Startup performs no Yandex requests.
+
+| # | Action | Implementation | Side effects / notes |
+|---|--------|----------------|----------------------|
+| 1 | Log in | `yandex_disk_login` (src/cli.py) → `YandexDiskClient.login` (src/yandex_disk.py) | **Paste-based**: prompts for a Yandex OAuth access token (and optional refresh token) to paste — from a developer.yandex.com app with the "Cloud Disk" product, or reused from `yamusic_token`; stores it under `yandex_disk.auth` with a far-future expiry (used until the API 401s) |
+| 2 | Show status | `yandex_disk_status` (src/cli.py) → `YandexDiskClient.status` (src/yandex_disk.py:173) | Prints API base, config file, scope and token state/expiry; no network |
+| 3 | List directory | `yandex_disk_list` (src/cli.py) → `list_dir` (src/yandex_disk.py:390) | Prompts for a Disk path (default `/`), prints items (name/type/size); auto-login if needed |
+| 4 | Download file | `yandex_disk_download` (src/cli.py) → `download` (src/yandex_disk.py:412) | Streams the file to a local path (default `downloads/yandex_disk/<name>`); 404/failure returns None + log, never aborts |
+| 5 | Upload file | `yandex_disk_upload` (src/cli.py) → `upload` (src/yandex_disk.py:446) | Two-step reserve/commit; on HTTP 409 conflict, skips unless overwrite is confirmed |
+| 6 | Delete file/folder | `yandex_disk_delete` (src/cli.py) → `delete` (src/yandex_disk.py:504) | **Destructive**: prompts for a Disk path + `y` confirmation, then deletes it |
+| 7 | Log out | `yandex_disk_logout` (src/cli.py) → `logout` (src/yandex_disk.py:228) | Removes the stored token from `yandex_disk.auth` |
+
+Transport details: one automatic token refresh when the access token is within
+60s of expiry, and one retry after an HTTP 401 (`_request`/`_reauth_after_401`).
+`YANDEX_DISK_TOKEN` overrides the stored token (scripts/tests). Login is
+**paste-based**, not an OAuth browser/device flow: Yandex treats the public
+Music client as a *registered* app, so `/device/code` rejects a custom scope
+(`invalid_scope`), device-code polling is rejected (`unsupported_grant_type`),
+and `/authorize` rejects any non-fixed `redirect_uri` (`redirect_uri не
+совпадает с Callback URL`). The pasted token is a general-purpose Yandex token
+(same family as `yamusic_token`) and works for the Disk API; refresh only works
+if a refresh token was pasted (otherwise a 401 asks you to run Log in again).
+
 ## Direct file outputs
 
 All paths are relative to the repository root (see `src/paths.py`).
@@ -124,6 +154,9 @@ All paths are relative to the repository root (see `src/paths.py`).
 | Buildin 1 | `config/config.yaml` (`buildin.auth` block) |
 | Buildin 6 | Buildin page/database; `config/buildin_music.json` (ID cache) |
 | Buildin 7 | `data/playlists_map.yaml`, `data/yamusic.yaml` (+ `.bak` copies) |
+| Disk 1 | `config/config.yaml` (`yandex_disk.auth` block) |
+| Disk 4 | `downloads/yandex_disk/<name>` (or the chosen local destination) |
+| Disk 5 | Yandex Disk (remote file at the chosen Disk path) |
 | every run | `logs/music_api_<timestamp>.log` |
 
 ## Makefile targets

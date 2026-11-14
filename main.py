@@ -14,6 +14,7 @@ from src import (
     BuildinClient,
     TelegramClient,
     TelegramUserClient,
+    YandexDiskClient,
     CLI
 )
 from src.buildin import DEFAULT_MCP_URL
@@ -94,8 +95,15 @@ def main() -> None:
             "configured" if telegram_user.configured else "not configured (no telegram.api_id/api_hash)",
         )
 
+        # Yandex Disk (REST); lazy — no network until a command uses it.
+        yandex_disk = YandexDiskClient(config_path=paths.resolve_config(args.config))
+        logger.info(
+            "Yandex Disk: %s",
+            "configured" if yandex_disk.is_authorized() else "not logged in (use Yandex Disk → Log in)",
+        )
+
         # Start CLI interface
-        cli = CLI(yamusic, ytmusic, buildin, args, telegram, telegram_user)
+        cli = CLI(yamusic, ytmusic, buildin, args, telegram, telegram_user, yandex_disk=yandex_disk)
         cli.run()
         
         logger.info("Transfer completed successfully")

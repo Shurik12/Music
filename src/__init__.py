@@ -9,6 +9,7 @@ from src.buildin_maps import MapSyncError
 from src.telegram import TelegramClient, TelegramError
 from src.telegram_user import TelegramUserClient
 from src.telegram_commands import create_handler
+from src.yandex_disk import YandexDiskClient, YandexDiskError
 from src.cli import CLI
 
 __all__ = [
@@ -26,5 +27,7 @@ __all__ = [
     'TelegramError',
     'TelegramUserClient',
     'create_handler',
+    'YandexDiskClient',
+    'YandexDiskError',
     'CLI'
 ]

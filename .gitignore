@@ -7,6 +7,7 @@ config/buildin_music.json
 config/telegram.json
 config/telegram_mtproto.session*
 config/telegram_user.session*
+config/yandex_disk_token.json
 # Legacy locations (pre config/ layout); browser.json was committed historically.
 config.yaml
 browser.json

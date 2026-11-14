@@ -56,3 +56,11 @@ ytmusic_download_dir: downloads
 # (gitignored). It is what gives access to Saved Messages and your dialogs —
 # a bot account cannot see them.
 
+# Optional: Yandex Disk. The app writes the OAuth credentials into this file
+# under `yandex_disk.auth` (a managed block between marker comments — do not
+# edit inside it). `1` (Log in) in the Yandex Disk menu runs a device flow:
+# it prints a URL + short code, you approve on yandex.com, and the token is
+# stored + auto-refreshed. `YANDEX_DISK_TOKEN` overrides the stored token for
+# headless runs.
+# yandex_disk: {}
+

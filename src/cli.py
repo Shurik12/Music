@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from . import color
+from . import color, paths
 from .yamusic import YaMusicHandle
 from .ytmusic import YTMusicClient
 from .buildin import BuildinClient, BuildinError
@@ -11,6 +11,7 @@ from .buildin_maps import MapSyncError, export_maps, import_maps, write_imported
 from .telegram import TelegramClient, TelegramError
 from .telegram_user import TelegramUserClient
 from .telegram_commands import create_handler
+from .yandex_disk import YandexDiskClient, YandexDiskError
 
 
 class CLI:
@@ -53,19 +54,30 @@ class CLI:
         "User: Saved Messages",
         "User: log out",
     ]
+    YANDEX_DISK_MENU = [
+        "Log in (paste token)",
+        "Status",
+        "List directory",
+        "Download file",
+        "Upload file",
+        "Delete file/folder (destructive)",
+        "Log out",
+    ]
 
     def __init__(self, yamusic: YaMusicHandle, ytmusic: YTMusicClient,
                  buildin: BuildinClient, args,
                  telegram: Optional[TelegramClient] = None,
-                 telegram_user: Optional[TelegramUserClient] = None) -> None:
+                 telegram_user: Optional[TelegramUserClient] = None,
+                 yandex_disk: Optional[YandexDiskClient] = None) -> None:
         self.yamusic = yamusic
         self.ytmusic = ytmusic
         self.buildin = buildin
         self.args = args
         self.telegram = telegram
         self.telegram_user = telegram_user
+        self.yandex_disk = yandex_disk
         self.running = True
-        self.mode: Optional[str] = None  # 'ytmusic', 'yamusic', 'buildin' or 'telegram'
+        self.mode: Optional[str] = None  # 'ytmusic', 'yamusic', 'buildin', 'telegram' or 'yandex_disk'
 
     @staticmethod
     def _select(title: str, items: list[str],
@@ -626,13 +638,13 @@ class CLI:
                 # Mode selection
                 if self.mode is None:
                     idx = self._select("Select API Mode",
-                                       ["YouTube Music", "Yandex Music", "Buildin AI", "Telegram"],
+                                       ["YouTube Music", "Yandex Music", "Buildin AI", "Telegram", "Yandex Disk"],
                                        back_label="Exit")
                     if idx == -1:
                         print("\n" + color.cyan("Goodbye!"))
                         self.running = False
                         break
-                    self.mode = ['ytmusic', 'yamusic', 'buildin', 'telegram'][idx]
+                    self.mode = ['ytmusic', 'yamusic', 'buildin', 'telegram', 'yandex_disk'][idx]
 
                 # YouTube Music mode
                 elif self.mode == 'ytmusic':
@@ -665,6 +677,14 @@ class CLI:
                         self.mode = None
                         continue
                     self._dispatch_telegram(idx)
+
+                # Yandex Disk mode
+                elif self.mode == 'yandex_disk':
+                    idx = self._select("Yandex Disk", self.YANDEX_DISK_MENU, back_label="Back")
+                    if idx == -1:
+                        self.mode = None
+                        continue
+                    self._dispatch_yandex_disk(idx)
 
             except KeyboardInterrupt:
                 print("\n\n" + color.cyan("Goodbye!"))
@@ -735,6 +755,180 @@ class CLI:
             self.telegram_user_login,
             self.telegram_saved,
             self.telegram_user_logout,
+        ]
+        cmds[idx]()
+        self._pause()
+
+    # ---------------------------------------------------------- Yandex Disk
+    def _need_yandex_disk(self) -> Optional[YandexDiskClient]:
+        """Return the Yandex Disk client, or None with a message if unusable."""
+        if self.yandex_disk is None:
+            print(color.red("Yandex Disk is not available."))
+            return None
+        return self.yandex_disk
+
+    def _yandex_disk_ensure_login(self) -> bool:
+        """Log in on demand before running a command that needs Disk auth."""
+        disk = self._need_yandex_disk()
+        if disk is None:
+            return False
+        if disk.is_authorized():
+            return True
+        print(color.yellow("Yandex Disk authorization is required for this command."))
+        return self.yandex_disk_login()
+
+    def yandex_disk_login(self) -> bool:
+        disk = self._need_yandex_disk()
+        if disk is None:
+            return False
+        try:
+            data = disk.login()
+        except YandexDiskError as e:
+            print(color.red(f"Yandex Disk login failed: {e}"))
+            return False
+        except KeyboardInterrupt:
+            print(color.cyan("\nYandex Disk login cancelled."))
+            return False
+        except Exception as e:
+            print(color.red(f"Yandex Disk login failed: {type(e).__name__}: {e}"))
+            return False
+
+        expires_at = data.get("expires_at")
+        if expires_at:
+            expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
+            print(color.green(f"Logged in to Yandex Disk. Token expires at {expires} (auto-refreshed)."))
+        else:
+            print(color.green("Logged in to Yandex Disk."))
+        return True
+
+    def yandex_disk_status(self) -> None:
+        disk = self._need_yandex_disk()
+        if disk is None:
+            return
+        status = disk.status()
+        print(f"  API base:    {color.cyan(status['api_base'])}")
+        print(f"  Config file: {status['config_file']}")
+        print(f"  Credentials: {color.cyan('yandex_disk.auth')} (written by the app)")
+        print(f"  Scope:       {status['scope']}")
+        if not status["authorized"]:
+            print(f"  Status:      {color.red('not authorized')} (run Log in first)")
+            return
+        if status["env_override"]:
+            print(f"  Status:      {color.green('authorized')} via YANDEX_DISK_TOKEN")
+            return
+        expires_at = status.get("expires_at")
+        if expires_at:
+            expires = datetime.fromtimestamp(float(expires_at)).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  Status:      {color.green('authorized')} (token expires at {expires})")
+        else:
+            print(f"  Status:      {color.green('authorized')}")
+
+    def yandex_disk_list(self) -> None:
+        if not self._yandex_disk_ensure_login():
+            return
+        disk = self.yandex_disk
+        path = input("Disk path to list (default /): ").strip() or "/"
+        try:
+            items = disk.list_dir(path)
+        except YandexDiskError as e:
+            print(color.red(f"Could not list {path}: {e}"))
+            return
+        if not items:
+            print(color.yellow(f"{path} is empty."))
+            return
+        print(color.cyan(f"  {len(items)} item(s) in {path}:"))
+        for item in items:
+            name = item.get("name", "?")
+            size = item.get("size")
+            kind = item.get("type", "?")
+            extra = f"  ({size:,} bytes)" if kind == "file" and size is not None else ""
+            prefix = "▸ " if kind == "dir" else "  "
+            print(f"  {prefix}{color.cyan(name)}{extra}")
+
+    def yandex_disk_download(self) -> None:
+        if not self._yandex_disk_ensure_login():
+            return
+        disk = self.yandex_disk
+        path = input("Disk file path to download: ").strip()
+        if not path:
+            print("No path given.")
+            return
+        raw_dest = input("Local destination (dir or file; empty = default downloads/yandex_disk): ").strip()
+        dest = paths.resolve(raw_dest) if raw_dest else None
+        try:
+            result = disk.download(path, dest)
+        except YandexDiskError as e:
+            print(color.red(f"Download failed: {e}"))
+            return
+        if result:
+            print(color.green(f"Saved to {result}"))
+        else:
+            print(color.yellow("Download failed (see the log for details)."))
+
+    def yandex_disk_upload(self) -> None:
+        if not self._yandex_disk_ensure_login():
+            return
+        disk = self.yandex_disk
+        local = paths.resolve(input("Local file to upload: ").strip())
+        if not local.is_file():
+            print(color.red(f"Not a file: {local}"))
+            return
+        target = input("Disk target path (e.g. /music/artist - title.mp3): ").strip()
+        if not target:
+            print("No target path given.")
+            return
+        overwrite = input("Overwrite if it already exists? [y/N] ").strip().lower() in ("y", "yes")
+        try:
+            committed = disk.upload(local, target, overwrite=overwrite)
+        except YandexDiskError as e:
+            print(color.red(f"Upload failed: {e}"))
+            return
+        if committed:
+            print(color.green(f"Uploaded {local} -> {target}"))
+        else:
+            print(color.yellow("Upload not completed (skipped or failed — see the log)."))
+
+    def yandex_disk_delete(self) -> None:
+        if not self._yandex_disk_ensure_login():
+            return
+        disk = self.yandex_disk
+        path = input("Disk path to DELETE (file or folder): ").strip()
+        if not path:
+            print("No path given.")
+            return
+        if input(f"Really delete {path}? This cannot be undone. [y/N] ").strip().lower() not in ("y", "yes"):
+            print(color.yellow("Deleted nothing — cancelled."))
+            return
+        try:
+            ok = disk.delete(path)
+        except YandexDiskError as e:
+            print(color.red(f"Delete failed: {e}"))
+            return
+        if ok:
+            print(color.green(f"Deleted {path}"))
+        else:
+            print(color.yellow("Delete did not succeed."))
+
+    def yandex_disk_logout(self) -> None:
+        disk = self._need_yandex_disk()
+        if disk is None:
+            return
+        if input("Log out of Yandex Disk (remove stored tokens)? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+        disk.logout()
+        print(color.green("Yandex Disk tokens removed."))
+
+    def _dispatch_yandex_disk(self, idx: int) -> None:
+        assert 0 <= idx < len(self.YANDEX_DISK_MENU), f"Invalid Yandex Disk menu index: {idx}"
+        cmds = [
+            self.yandex_disk_login,
+            self.yandex_disk_status,
+            self.yandex_disk_list,
+            self.yandex_disk_download,
+            self.yandex_disk_upload,
+            self.yandex_disk_delete,
+            self.yandex_disk_logout,
         ]
         cmds[idx]()
         self._pause()
